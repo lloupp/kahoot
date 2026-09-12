@@ -83,6 +83,12 @@ export class GameManager extends EventEmitter {
     return this.sessions.get(pin);
   }
 
+  /** All currently active sessions — used for a graceful-shutdown sweep so
+   * an in-progress game's results aren't silently lost on deploy/restart. */
+  getAllSessions(): GameSessionState[] {
+    return [...this.sessions.values()];
+  }
+
   createSession(input: CreateSessionInput): GameSessionState {
     if (input.questions.length === 0) {
       throw new GameError("EMPTY_QUIZ", "This quiz has no questions and cannot be played");

@@ -110,21 +110,20 @@ lint/typecheck/build, not automated component or e2e tests.
   avoids needing object storage for this scope. A teacher hosts the image
   elsewhere and pastes the link.
 - Live game state is in-memory per server process; a crash mid-game loses
-  that game's *live* state (already-finished games are persisted, and a game
-  idle for 30+ minutes is auto-persisted as "abandoned" before being dropped,
-  but a crash between those points still loses it).
-- No mid-question host control (skip/pause) and no automatic early-end when
-  every connected player has answered — a question always runs its full
-  configured timer.
-- Reports are per-student, not per-question: `GameAnswer` doesn't carry a
-  `questionId`, so there's no "which question did the class struggle with"
-  view yet, only each student's own list of answers.
-- Socket.IO is configured for WebSocket transport only; a network that blocks
-  the WS upgrade (some school proxies) will fail to connect rather than
-  falling back to polling.
-- The join/answer rate limiter is per-socket, a mitigation against casual PIN
-  guessing rather than a hard guarantee — a determined attacker opening many
-  sockets isn't blocked by it (PIN error responses stay generic and games
-  auto-expire as a backstop).
+  that game's *live* state (already-finished games are persisted, an idle
+  game is auto-persisted as "abandoned" after 30 minutes, and a graceful
+  shutdown (SIGTERM/SIGINT) persists every in-progress game before exiting —
+  but an actual crash, as opposed to a clean stop or restart, between those
+  points still loses it). Horizontal scaling beyond one server process would
+  need a shared adapter (e.g. Redis) for Socket.IO plus moving `GameManager`'s
+  state out of process memory — not implemented.
+- The host can skip a question early and it also auto-closes once every
+  connected player has answered, but there's no pause/resume control.
+- The join/answer/rejoin rate limiter (per-socket and per-IP) is a
+  mitigation against casual PIN guessing, not a hard guarantee — a patient
+  attacker distributed across many IPs isn't blocked by it (PIN error
+  responses stay generic and games auto-expire as a backstop).
 - No profanity/impersonation filtering on student display names beyond
   length trimming and per-session case-insensitive uniqueness.
+- No automated tests for the frontend beyond `client`'s lint/typecheck/build
+  and manual browser verification — see Testing below for what does exist.

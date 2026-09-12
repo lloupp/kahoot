@@ -19,23 +19,37 @@ function fail(ack: Ack, err: unknown) {
   }
 }
 
-// Cheap brute-force guard against PIN scanning. Keyed on both the socket
-// (tight limit — a single connection has no reason to hammer these events)
-// and the remote address (looser limit, since a classroom of students can
-// legitimately share one IP): a socket-only limit is trivially bypassed by
-// opening a new connection per attempt, which is exactly how an attacker
-// would scan the PIN space. This is still a mitigation, not a hard
-// guarantee — PIN error responses stay generic and games auto-expire.
-const ATTEMPT_WINDOW_MS = 60 * 1000;
-const SOCKET_ATTEMPT_LIMIT = 8;
-const IP_ATTEMPT_LIMIT = 40;
-const attemptsBySocket = new Map<string, { count: number; windowStart: number }>();
-const attemptsByIp = new Map<string, { count: number; windowStart: number }>();
+// Two separate throttles, because they guard two very different things.
+//
+// 1. PIN-GUESS throttle: applies to events that can be used to hunt for a
+//    live PIN (student:join, student:rejoin — which also carries a
+//    participant id + join token — and host:join, which is reachable by
+//    *any* registered account, not just a game's actual host, and leaks PIN
+//    existence via distinct PIN_NOT_FOUND vs FORBIDDEN error codes). Kept
+//    tight per-socket, looser per-IP since a classroom can share one IP.
+//    Still a mitigation, not a hard guarantee: PIN errors stay generic and
+//    games auto-expire as a backstop.
+// 2. ACTION throttle: applies to events from a socket that's already bound
+//    to a real participant/host (student:answer, and the host controls).
+//    These aren't a guessing vector at all — the risk is only a runaway or
+//    malicious client hammering the server — so the budget is generous
+//    enough that no real class or quiz pacing should ever hit it. A shared
+//    budget with PIN-guessing would otherwise punish normal gameplay (a
+//    fast-paced quiz with short timers legitimately produces many answer/
+//    host events per minute).
+const WINDOW_MS = 60 * 1000;
+const PIN_GUESS_SOCKET_LIMIT = 15;
+const PIN_GUESS_IP_LIMIT = 150;
+const ACTION_SOCKET_LIMIT = 300;
+
+const pinGuessBySocket = new Map<string, { count: number; windowStart: number }>();
+const pinGuessByIp = new Map<string, { count: number; windowStart: number }>();
+const actionBySocket = new Map<string, { count: number; windowStart: number }>();
 
 function checkAndBump(store: Map<string, { count: number; windowStart: number }>, key: string, limit: number): boolean {
   const now = Date.now();
   const entry = store.get(key);
-  if (!entry || now - entry.windowStart > ATTEMPT_WINDOW_MS) {
+  if (!entry || now - entry.windowStart > WINDOW_MS) {
     store.set(key, { count: 1, windowStart: now });
     return true;
   }
@@ -43,16 +57,21 @@ function checkAndBump(store: Map<string, { count: number; windowStart: number }>
   return entry.count <= limit;
 }
 
-function registerAttempt(socket: Socket): boolean {
-  const bySocket = checkAndBump(attemptsBySocket, socket.id, SOCKET_ATTEMPT_LIMIT);
-  const byIp = checkAndBump(attemptsByIp, socket.handshake.address, IP_ATTEMPT_LIMIT);
+function registerPinGuessAttempt(socket: Socket): boolean {
+  const bySocket = checkAndBump(pinGuessBySocket, socket.id, PIN_GUESS_SOCKET_LIMIT);
+  const byIp = checkAndBump(pinGuessByIp, socket.handshake.address, PIN_GUESS_IP_LIMIT);
   return bySocket && byIp;
 }
 
+function registerAction(socket: Socket): boolean {
+  return checkAndBump(actionBySocket, socket.id, ACTION_SOCKET_LIMIT);
+}
+
 setInterval(() => {
-  const cutoff = Date.now() - ATTEMPT_WINDOW_MS;
-  for (const [key, entry] of attemptsBySocket) if (entry.windowStart < cutoff) attemptsBySocket.delete(key);
-  for (const [key, entry] of attemptsByIp) if (entry.windowStart < cutoff) attemptsByIp.delete(key);
+  const cutoff = Date.now() - WINDOW_MS;
+  for (const [key, entry] of pinGuessBySocket) if (entry.windowStart < cutoff) pinGuessBySocket.delete(key);
+  for (const [key, entry] of pinGuessByIp) if (entry.windowStart < cutoff) pinGuessByIp.delete(key);
+  for (const [key, entry] of actionBySocket) if (entry.windowStart < cutoff) actionBySocket.delete(key);
 }, 5 * 60 * 1000).unref();
 
 function requireHostToken(token: string): string {
@@ -197,6 +216,9 @@ export function registerSocketHandlers(io: Server) {
   io.on("connection", (socket: Socket) => {
     socket.on("host:join", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
+        if (!registerPinGuessAttempt(socket)) {
+          throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
+        }
         const userId = requireHostToken(payload.token);
         const session = gameManager.attachHostSocket(payload.pin, userId, socket.id);
         socket.join(roomName(payload.pin));
@@ -208,6 +230,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("host:start-question", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
+        if (!registerAction(socket)) throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         const userId = requireHostToken(payload.token);
         const session = gameManager.startNextQuestion(payload.pin, userId);
         io.to(roomName(payload.pin)).emit("question:start", questionStartPayload(session));
@@ -219,6 +242,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("host:skip-question", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
+        if (!registerAction(socket)) throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         const userId = requireHostToken(payload.token);
         // Closing the question emits "question:ended" (registered above),
         // which broadcasts the reveal and personal results — no separate
@@ -232,6 +256,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("host:show-leaderboard", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
+        if (!registerAction(socket)) throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         const userId = requireHostToken(payload.token);
         const session = gameManager.advanceToLeaderboard(payload.pin, userId);
         io.to(roomName(payload.pin)).emit("leaderboard:update", leaderboardPayload(session));
@@ -256,6 +281,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("host:next", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
+        if (!registerAction(socket)) throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         const userId = requireHostToken(payload.token);
         const session = gameManager.getByPin(payload.pin);
         if (!session) throw new GameError("PIN_NOT_FOUND", "No active game found for this PIN");
@@ -273,6 +299,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("host:end-game", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
+        if (!registerAction(socket)) throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         const userId = requireHostToken(payload.token);
         ok(ack, finishGame(payload.pin, userId));
       } catch (err) {
@@ -282,7 +309,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("student:join", (payload: { pin: string; name: string }, ack: Ack) => {
       try {
-        if (!registerAttempt(socket)) {
+        if (!registerPinGuessAttempt(socket)) {
           throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         }
         const participant = gameManager.joinAsStudent(payload.pin, payload.name);
@@ -304,7 +331,7 @@ export function registerSocketHandlers(io: Server) {
       "student:rejoin",
       (payload: { pin: string; participantId: string; joinToken: string }, ack: Ack) => {
         try {
-          if (!registerAttempt(socket)) {
+          if (!registerPinGuessAttempt(socket)) {
             throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
           }
           const session = gameManager.rejoinStudent(
@@ -334,7 +361,7 @@ export function registerSocketHandlers(io: Server) {
         ack: Ack,
       ) => {
         try {
-          if (!registerAttempt(socket)) {
+          if (!registerAction(socket)) {
             throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
           }
           gameManager.submitAnswer(
@@ -355,7 +382,8 @@ export function registerSocketHandlers(io: Server) {
     );
 
     socket.on("disconnect", () => {
-      attemptsBySocket.delete(socket.id);
+      pinGuessBySocket.delete(socket.id);
+      actionBySocket.delete(socket.id);
       const result = gameManager.handleDisconnect(socket.id);
       if (!result) return;
       const session = gameManager.getByPin(result.pin);

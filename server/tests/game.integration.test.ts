@@ -90,7 +90,7 @@ describe("multiplayer game flow", () => {
   it("throttles a single socket that hammers join attempts", async () => {
     const attacker = await connectClient();
     const results: Ack[] = [];
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 25; i++) {
       results.push(await emitAsync(attacker, "student:join", { pin: "000000", name: `Guess${i}` }));
     }
     const rateLimited = results.filter((r) => !r.ok && r.code === "RATE_LIMITED");
@@ -466,6 +466,31 @@ describe("multiplayer game flow", () => {
     expect(rows.length).toBe(1);
   });
 
+  it("closes the question when the last unanswered player disconnects, not just when they answer", async () => {
+    const { token, quiz, pin } = await setupGame(1, 30000); // long timer we should never actually wait out
+    const host = await connectClient();
+    await emitAsync(host, "host:join", { pin, token });
+    const alice = await connectClient();
+    const bob = await connectClient();
+    const aliceJoin = await emitAsync(alice, "student:join", { pin, name: "Alice" });
+    await emitAsync(bob, "student:join", { pin, name: "Bob" });
+    await emitAsync(host, "host:start-question", { pin, token });
+
+    const q = quiz.questions[0];
+    const correctChoice = q.choices.find((c: any) => c.isCorrect).id;
+    const revealPromise = waitForEvent(host, "question:reveal");
+    await emitAsync(alice, "student:answer", {
+      pin,
+      participantId: aliceJoin.ok ? aliceJoin.data.participantId : "",
+      questionId: q.id,
+      choiceId: correctChoice,
+    });
+    // Bob never answers — he just leaves. Every remaining connected player
+    // (Alice) has now answered, so the question should close immediately.
+    bob.disconnect();
+    await revealPromise;
+  });
+
   it("lets the host skip a question before the timer runs out", async () => {
     const { token, pin } = await setupGame(2, 30000); // a long timer we're going to skip past
     const host = await connectClient();
@@ -479,10 +504,11 @@ describe("multiplayer game flow", () => {
     expect(skip.ok).toBe(true);
     await revealPromise; // resolves promptly, not after 30s
 
-    // Skipping outside of an active question is a no-op error, not a crash.
+    // Skipping outside of an active question is a genuine no-op, not an
+    // error — this race (auto-close beating the host's own click) is
+    // expected, not something to surface as a red banner on the projector.
     const skipAgain = await emitAsync(host, "host:skip-question", { pin, token });
-    expect(skipAgain.ok).toBe(false);
-    expect(!skipAgain.ok && skipAgain.code).toBe("INVALID_PHASE");
+    expect(skipAgain.ok).toBe(true);
   });
 
   it("does not write a history row for a game ended from the lobby before any question started", async () => {
@@ -498,6 +524,42 @@ describe("multiplayer game flow", () => {
     expect(rows.length).toBe(0);
   });
 
+  it("lets a full-size class (35 students, one shared IP) join and answer without being rate-limited", async () => {
+    // Regression test for a real bug: an earlier version of the rate limiter
+    // shared one tight budget across join/rejoin/answer, so a real classroom
+    // sharing one IP got throttled answering the very first question.
+    const timeLimitMs = 20000;
+    const { token, quiz, pin } = await setupGame(1, timeLimitMs);
+    const host = await connectClient();
+    const hostJoin = await emitAsync(host, "host:join", { pin, token });
+    expect(hostJoin.ok).toBe(true);
+
+    const studentCount = 35;
+    const students = await Promise.all(Array.from({ length: studentCount }, () => connectClient()));
+    const joinResults = await Promise.all(
+      students.map((s, i) => emitAsync(s, "student:join", { pin, name: `Student${i}` })),
+    );
+    const failedJoins = joinResults.filter((r) => !r.ok);
+    expect(failedJoins).toEqual([]);
+
+    const q = quiz.questions[0];
+    const correctChoice = q.choices.find((c: any) => c.isCorrect).id;
+    const revealPromise = waitForEvent(host, "question:reveal");
+    await emitAsync(host, "host:start-question", { pin, token });
+
+    const participantIds = joinResults.map((r) => (r.ok ? r.data.participantId : ""));
+    const answerResults = await Promise.all(
+      students.map((s, i) =>
+        emitAsync(s, "student:answer", { pin, participantId: participantIds[i], questionId: q.id, choiceId: correctChoice }),
+      ),
+    );
+    const failedAnswers = answerResults.filter((r) => !r.ok);
+    expect(failedAnswers).toEqual([]);
+
+    // All 35 answering should also trigger the early-close, not the full 20s timer.
+    await revealPromise;
+  });
+
   it("rejects host actions from a token that does not own the session", async () => {
     const { pin } = await setupGame(1, 5000);
     const email = `${randomUUID()}@example.com`;
@@ -509,5 +571,25 @@ describe("multiplayer game flow", () => {
     const res = await emitAsync(intruderSocket, "host:join", { pin, token: intruderToken });
     expect(res.ok).toBe(false);
     expect(!res.ok && res.code).toBe("FORBIDDEN");
+  });
+
+  it("throttles host:join PIN scanning — a valid account can't freely enumerate live PINs", async () => {
+    // host:join is reachable by ANY registered account (registration is
+    // open), and it distinguishes PIN_NOT_FOUND from FORBIDDEN — so without
+    // its own throttle, one account could scan the whole PIN space for live
+    // games. It must share the same guard as student:join.
+    const email = `${randomUUID()}@example.com`;
+    const reg = await request(baseUrl)
+      .post("/api/auth/register")
+      .send({ name: "Scanner", email, password: "supersecret1" });
+    const token = reg.body.token as string;
+    const scanner = await connectClient();
+
+    const results: Ack[] = [];
+    for (let i = 0; i < 25; i++) {
+      results.push(await emitAsync(scanner, "host:join", { pin: String(100000 + i), token }));
+    }
+    const rateLimited = results.filter((r) => !r.ok && r.code === "RATE_LIMITED");
+    expect(rateLimited.length).toBeGreaterThan(0);
   });
 });

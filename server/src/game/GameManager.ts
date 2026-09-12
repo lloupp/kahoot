@@ -230,6 +230,10 @@ export class GameManager extends EventEmitter {
         participant.socketId = null;
       }
       this.socketToParticipant.delete(socketId);
+      // The disconnecting participant might have been the last one the
+      // question was still waiting on — re-check now, otherwise the class
+      // sits out the rest of the timer for someone who just left.
+      if (session) this.maybeEndQuestionEarly(session);
       return { pin: binding.pin, role: "student" };
     }
     return null;
@@ -340,14 +344,15 @@ export class GameManager extends EventEmitter {
   }
 
   /** Lets the host close a question before its timer runs out (e.g. the
-   * class is clearly done, or the teacher wants to move on). Safe to call
-   * from any phase other than "question" — it's just a no-op ack there,
-   * since the button that triggers it is only shown then. */
+   * class is clearly done, or the teacher wants to move on). A genuine
+   * no-op — not an error — outside the "question" phase: the auto-close
+   * (every connected player answered) can race the host's own click on the
+   * skip button, and that race losing is normal, not a problem to report. */
   skipQuestion(pin: string, hostUserId: string): GameSessionState {
     const session = this.requireSession(pin);
     this.assertHost(session, hostUserId);
     if (session.phase !== "question") {
-      throw new GameError("INVALID_PHASE", "There is no active question to skip");
+      return session;
     }
     this.endQuestion(pin);
     return session;

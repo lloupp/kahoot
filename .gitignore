@@ -9,3 +9,4 @@ server/prisma/test.db
 server/prisma/test.db-journal
 .DS_Store
 coverage/
+*.tsbuildinfo

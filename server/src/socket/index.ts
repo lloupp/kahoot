@@ -19,24 +19,41 @@ function fail(ack: Ack, err: unknown) {
   }
 }
 
-// Cheap brute-force guard against PIN scanning: a socket gets a handful of
-// join attempts per minute before further attempts are throttled. This is a
-// mitigation, not a hard guarantee — a determined attacker can open new
-// sockets — so PIN error responses stay generic and games auto-expire.
-const ATTEMPT_LIMIT = 8;
+// Cheap brute-force guard against PIN scanning. Keyed on both the socket
+// (tight limit — a single connection has no reason to hammer these events)
+// and the remote address (looser limit, since a classroom of students can
+// legitimately share one IP): a socket-only limit is trivially bypassed by
+// opening a new connection per attempt, which is exactly how an attacker
+// would scan the PIN space. This is still a mitigation, not a hard
+// guarantee — PIN error responses stay generic and games auto-expire.
 const ATTEMPT_WINDOW_MS = 60 * 1000;
+const SOCKET_ATTEMPT_LIMIT = 8;
+const IP_ATTEMPT_LIMIT = 40;
 const attemptsBySocket = new Map<string, { count: number; windowStart: number }>();
+const attemptsByIp = new Map<string, { count: number; windowStart: number }>();
 
-function registerAttempt(socketId: string): boolean {
+function checkAndBump(store: Map<string, { count: number; windowStart: number }>, key: string, limit: number): boolean {
   const now = Date.now();
-  const entry = attemptsBySocket.get(socketId);
+  const entry = store.get(key);
   if (!entry || now - entry.windowStart > ATTEMPT_WINDOW_MS) {
-    attemptsBySocket.set(socketId, { count: 1, windowStart: now });
+    store.set(key, { count: 1, windowStart: now });
     return true;
   }
   entry.count += 1;
-  return entry.count <= ATTEMPT_LIMIT;
+  return entry.count <= limit;
 }
+
+function registerAttempt(socket: Socket): boolean {
+  const bySocket = checkAndBump(attemptsBySocket, socket.id, SOCKET_ATTEMPT_LIMIT);
+  const byIp = checkAndBump(attemptsByIp, socket.handshake.address, IP_ATTEMPT_LIMIT);
+  return bySocket && byIp;
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - ATTEMPT_WINDOW_MS;
+  for (const [key, entry] of attemptsBySocket) if (entry.windowStart < cutoff) attemptsBySocket.delete(key);
+  for (const [key, entry] of attemptsByIp) if (entry.windowStart < cutoff) attemptsByIp.delete(key);
+}, 5 * 60 * 1000).unref();
 
 function requireHostToken(token: string): string {
   try {
@@ -252,7 +269,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("student:join", (payload: { pin: string; name: string }, ack: Ack) => {
       try {
-        if (!registerAttempt(socket.id)) {
+        if (!registerAttempt(socket)) {
           throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         }
         const participant = gameManager.joinAsStudent(payload.pin, payload.name);
@@ -274,7 +291,7 @@ export function registerSocketHandlers(io: Server) {
       "student:rejoin",
       (payload: { pin: string; participantId: string; joinToken: string }, ack: Ack) => {
         try {
-          if (!registerAttempt(socket.id)) {
+          if (!registerAttempt(socket)) {
             throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
           }
           const session = gameManager.rejoinStudent(
@@ -304,7 +321,7 @@ export function registerSocketHandlers(io: Server) {
         ack: Ack,
       ) => {
         try {
-          if (!registerAttempt(socket.id)) {
+          if (!registerAttempt(socket)) {
             throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
           }
           gameManager.submitAnswer(

@@ -87,6 +87,20 @@ describe("multiplayer game flow", () => {
     expect(!res.ok && res.code).toBe("PIN_NOT_FOUND");
   });
 
+  it("throttles a single socket that hammers join attempts", async () => {
+    const attacker = await connectClient();
+    const results: Ack[] = [];
+    for (let i = 0; i < 12; i++) {
+      results.push(await emitAsync(attacker, "student:join", { pin: "000000", name: `Guess${i}` }));
+    }
+    const rateLimited = results.filter((r) => !r.ok && r.code === "RATE_LIMITED");
+    expect(rateLimited.length).toBeGreaterThan(0);
+    // The first several attempts still resolve as ordinary PIN-not-found
+    // errors — the guard only kicks in once the burst is excessive.
+    expect(results[0].ok).toBe(false);
+    expect(!results[0].ok && results[0].code).toBe("PIN_NOT_FOUND");
+  });
+
   it("rejects a duplicate name within the same session", async () => {
     const { pin } = await setupGame(1, 5000);
     const a = await connectClient();

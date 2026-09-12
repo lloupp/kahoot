@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  quizzes      Quiz[]
+}
+
+model Quiz {
+  id          String     @id @default(uuid())
+  title       String
+  subject     String?
+  description String?
+  ownerId     String
+  owner       User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  questions   Question[]
+  sessions    GameSession[]
+}
+
+model Question {
+  id             String   @id @default(uuid())
+  quizId         String
+  quiz           Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  text           String
+  imageUrl       String?
+  timeLimitMs    Int      @default(20000)
+  points         Int      @default(1000)
+  order          Int
+  choices        Choice[]
+}
+
+model Choice {
+  id         String   @id @default(uuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  text       String
+  isCorrect  Boolean  @default(false)
+  order      Int
+}
+
+model GameSession {
+  id           String              @id @default(uuid())
+  pin          String
+  quizId       String
+  quiz         Quiz                @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  hostId       String
+  status       String              @default("finished")
+  startedAt    DateTime            @default(now())
+  endedAt      DateTime?
+  participants GameParticipant[]
+}
+
+model GameParticipant {
+  id            String        @id @default(uuid())
+  sessionId     String
+  session       GameSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name          String
+  totalScore    Int           @default(0)
+  rank          Int?
+  answers       GameAnswer[]
+}
+
+model GameAnswer {
+  id             String          @id @default(uuid())
+  participantId  String
+  participant    GameParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  questionText   String
+  choiceText     String?
+  isCorrect      Boolean
+  pointsAwarded  Int
+  answerTimeMs   Int
+}

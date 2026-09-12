@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../db";
+import { Quiz, Question, Choice, GameSession, GameParticipant, GameAnswer } from "@prisma/client";
 import { requireAuth, AuthedRequest } from "../middleware/auth";
 import { HttpError } from "../middleware/errorHandler";
 import { gameManager, GameError } from "../game/GameManager";
@@ -9,24 +10,35 @@ export const sessionsRouter = Router();
 
 sessionsRouter.use(requireAuth);
 
+type QuizWithQuestions = Quiz & {
+  questions: (Question & { choices: Choice[] })[];
+};
+
+type GameSessionWithParticipants = GameSession & {
+  participants: (GameParticipant & { answers: GameAnswer[] })[];
+};
+
 // Start a new live session for one of the teacher's quizzes; returns the PIN.
 sessionsRouter.post("/", async (req: AuthedRequest, res, next) => {
   try {
     const quizId = String(req.body?.quizId ?? "");
     const quiz = await prisma.quiz.findUnique({
       where: { id: quizId },
-      include: { questions: { orderBy: { order: "asc" }, include: { choices: { orderBy: { order: "asc" } } } } },
+      include: {
+        questions: { orderBy: { order: "asc" }, include: { choices: { orderBy: { order: "asc" } } } },
+      },
     });
     if (!quiz) throw new HttpError(404, "Quiz not found");
     if (quiz.ownerId !== req.userId) throw new HttpError(403, "You do not have access to this quiz");
 
-    const questions: QuestionSnapshot[] = quiz.questions.map((q) => ({
+    const quizWithQuestions = quiz as QuizWithQuestions;
+    const questions: QuestionSnapshot[] = quizWithQuestions.questions.map((q: any) => ({
       id: q.id,
       text: q.text,
       imageUrl: q.imageUrl,
       timeLimitMs: q.timeLimitMs,
       points: q.points,
-      choices: q.choices.map((c) => ({ id: c.id, text: c.text, isCorrect: c.isCorrect })),
+      choices: q.choices.map((c: any) => ({ id: c.id, text: c.text, isCorrect: c.isCorrect })),
     }));
 
     const session = gameManager.createSession({
@@ -55,14 +67,14 @@ sessionsRouter.get("/history", async (req: AuthedRequest, res, next) => {
       include: { participants: true },
     });
     res.json(
-      sessions.map((s) => ({
+      (sessions as GameSessionWithParticipants[]).map((s: any) => ({
         id: s.id,
         pin: s.pin,
         quizTitle: s.quizTitle,
         startedAt: s.startedAt,
         endedAt: s.endedAt,
         playerCount: s.participants.length,
-        topScore: s.participants.reduce((max, p) => Math.max(max, p.totalScore), 0),
+        topScore: s.participants.reduce((max: number, p: any) => Math.max(max, p.totalScore), 0),
       })),
     );
   } catch (err) {
@@ -84,12 +96,13 @@ sessionsRouter.get("/history/:id", async (req: AuthedRequest, res, next) => {
     if (!session) throw new HttpError(404, "Session not found");
     if (session.hostId !== req.userId) throw new HttpError(403, "You do not have access to this session");
 
-    const totalPlayers = session.participants.length;
+    const sessionWithParticipants = session as GameSessionWithParticipants;
+    const totalPlayers = sessionWithParticipants.participants.length;
     const byQuestion = new Map<
       number,
       { questionOrder: number; questionText: string; correctCount: number; answeredCount: number; totalPlayers: number }
     >();
-    for (const participant of session.participants) {
+    for (const participant of sessionWithParticipants.participants) {
       for (const answer of participant.answers) {
         const entry = byQuestion.get(answer.questionOrder) ?? {
           questionOrder: answer.questionOrder,
@@ -112,9 +125,9 @@ sessionsRouter.get("/history/:id", async (req: AuthedRequest, res, next) => {
     // all, so this can't distinguish "skipped/never reached" from "everyone
     // ran out the timer with no answer" — it's reported as one honest,
     // unified count rather than a guess at which case it was.
-    const unscoredQuestionCount = Math.max(0, session.questionCount - questionBreakdown.length);
+    const unscoredQuestionCount = Math.max(0, sessionWithParticipants.questionCount - questionBreakdown.length);
 
-    res.json({ ...session, questionBreakdown, unscoredQuestionCount });
+    res.json({ ...sessionWithParticipants, questionBreakdown, unscoredQuestionCount });
   } catch (err) {
     next(err);
   }

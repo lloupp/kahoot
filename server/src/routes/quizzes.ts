@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { prisma } from "../db";
+import { Prisma, Quiz, Question, Choice } from "@prisma/client";
 import { requireAuth, AuthedRequest } from "../middleware/auth";
-import { quizSchema } from "../lib/validation";
+import { quizSchema, QuizInput } from "../lib/validation";
 import { HttpError } from "../middleware/errorHandler";
 
 export const quizzesRouter = Router();
@@ -15,11 +16,18 @@ const quizInclude = {
   },
 };
 
-async function loadOwnedQuiz(quizId: string, ownerId: string) {
-  const quiz = await prisma.quiz.findUnique({ where: { id: quizId }, include: quizInclude });
+type QuizWithQuestions = Quiz & {
+  questions: (Question & { choices: Choice[] })[];
+};
+
+async function loadOwnedQuiz(quizId: string, ownerId: string): Promise<QuizWithQuestions> {
+  const quiz = await prisma.quiz.findUnique({
+    where: { id: quizId },
+    include: quizInclude,
+  });
   if (!quiz) throw new HttpError(404, "Quiz not found");
   if (quiz.ownerId !== ownerId) throw new HttpError(403, "You do not have access to this quiz");
-  return quiz;
+  return quiz as QuizWithQuestions;
 }
 
 quizzesRouter.get("/", async (req: AuthedRequest, res, next) => {
@@ -63,13 +71,21 @@ quizzesRouter.post("/", async (req: AuthedRequest, res, next) => {
         description: data.description || null,
         ownerId: req.userId!,
         questions: {
-          create: data.questions.map((q, qi) => ({
+          create: data.questions.map((q: QuizInput["questions"][number], qi: number) => ({
             text: q.text,
             imageUrl: q.imageUrl || null,
             timeLimitMs: q.timeLimitMs,
             points: q.points,
             order: qi,
-            choices: { create: q.choices.map((c, ci) => ({ text: c.text, isCorrect: c.isCorrect, order: ci })) },
+            choices: {
+              create: (q.choices as QuizInput["questions"][number]["choices"]).map(
+                (c: QuizInput["questions"][number]["choices"][number], ci: number) => ({
+                  text: c.text,
+                  isCorrect: c.isCorrect,
+                  order: ci,
+                }),
+              ),
+            },
           })),
         },
       },
@@ -86,7 +102,7 @@ quizzesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
     await loadOwnedQuiz(req.params.id, req.userId!);
     const data = quizSchema.parse(req.body);
 
-    const quiz = await prisma.$transaction(async (tx) => {
+    const quiz = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.question.deleteMany({ where: { quizId: req.params.id } });
       return tx.quiz.update({
         where: { id: req.params.id },
@@ -95,13 +111,21 @@ quizzesRouter.put("/:id", async (req: AuthedRequest, res, next) => {
           subject: data.subject || null,
           description: data.description || null,
           questions: {
-            create: data.questions.map((q, qi) => ({
+            create: data.questions.map((q: QuizInput["questions"][number], qi: number) => ({
               text: q.text,
               imageUrl: q.imageUrl || null,
               timeLimitMs: q.timeLimitMs,
               points: q.points,
               order: qi,
-              choices: { create: q.choices.map((c, ci) => ({ text: c.text, isCorrect: c.isCorrect, order: ci })) },
+              choices: {
+                create: (q.choices as QuizInput["questions"][number]["choices"]).map(
+                  (c: QuizInput["questions"][number]["choices"][number], ci: number) => ({
+                    text: c.text,
+                    isCorrect: c.isCorrect,
+                    order: ci,
+                  }),
+                ),
+              },
             })),
           },
         },
@@ -134,14 +158,14 @@ quizzesRouter.post("/:id/duplicate", async (req: AuthedRequest, res, next) => {
         description: quiz.description,
         ownerId: req.userId!,
         questions: {
-          create: quiz.questions.map((q, qi) => ({
+          create: (quiz as QuizWithQuestions).questions.map((q: any, qi: number) => ({
             text: q.text,
             imageUrl: q.imageUrl,
             timeLimitMs: q.timeLimitMs,
             points: q.points,
             order: qi,
             choices: {
-              create: q.choices.map((c, ci) => ({ text: c.text, isCorrect: c.isCorrect, order: ci })),
+              create: q.choices.map((c: any, ci: number) => ({ text: c.text, isCorrect: c.isCorrect, order: ci })),
             },
           })),
         },

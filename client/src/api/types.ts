@@ -64,6 +64,13 @@ export interface SessionParticipantReport {
   answers: SessionAnswer[];
 }
 
+export interface QuestionBreakdown {
+  questionOrder: number;
+  questionText: string;
+  correctCount: number;
+  answeredCount: number;
+}
+
 export interface SessionReport {
   id: string;
   pin: string;
@@ -71,4 +78,5 @@ export interface SessionReport {
   endedAt: string | null;
   quizTitle: string;
   participants: SessionParticipantReport[];
+  questionBreakdown: QuestionBreakdown[];
 }

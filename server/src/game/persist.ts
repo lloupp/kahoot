@@ -22,9 +22,11 @@ export async function persistFinishedSession(session: GameSessionState, status: 
             rank: index + 1,
             answers: {
               create: [...p.answers.values()].map((a) => {
-                const question = session.questions.find((q) => q.id === a.questionId);
+                const questionOrder = session.questions.findIndex((q) => q.id === a.questionId);
+                const question = session.questions[questionOrder];
                 const choice = question?.choices.find((c) => c.id === a.choiceId);
                 return {
+                  questionOrder,
                   questionText: question?.text ?? "",
                   choiceText: choice?.text ?? null,
                   isCorrect: a.isCorrect,

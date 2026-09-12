@@ -198,7 +198,12 @@ export function HostSession() {
               ))}
             </div>
           </Card>
-          <p className="text-center text-slate-500">Waiting for the timer to end...</p>
+          <div className="flex flex-col items-center gap-2">
+            <p className="text-center text-slate-500">Closes when the timer ends or everyone has answered.</p>
+            <Button variant="secondary" size="md" disabled={actionPending} onClick={() => callHost("host:skip-question")}>
+              Skip to results
+            </Button>
+          </div>
         </div>
       )}
 

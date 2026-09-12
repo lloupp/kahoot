@@ -79,6 +79,11 @@ model GameAnswer {
   id             String          @id @default(uuid())
   participantId  String
   participant    GameParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  // Position of the question within the quiz as it was played (0-based) —
+  // stable per session even if the source quiz is later edited or deleted,
+  // and what lets the report aggregate "which question the class missed"
+  // across participants.
+  questionOrder  Int
   questionText   String
   choiceText     String?
   isCorrect      Boolean

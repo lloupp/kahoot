@@ -312,7 +312,35 @@ export class GameManager extends EventEmitter {
     participant.totalScore += pointsAwarded;
     this.touch(session);
 
+    this.maybeEndQuestionEarly(session);
     return participant;
+  }
+
+  /** Closes the question the moment every currently-connected participant
+   * has answered, instead of always waiting out the full timer. A student
+   * who disconnected mid-question doesn't count against this — otherwise a
+   * single dropped connection would strand everyone else at the timer. */
+  private maybeEndQuestionEarly(session: GameSessionState) {
+    if (session.phase !== "question") return;
+    const question = session.questions[session.currentQuestionIndex];
+    const connected = [...session.participants.values()].filter((p) => p.connected);
+    if (connected.length === 0) return;
+    const allAnswered = connected.every((p) => p.answers.has(question.id));
+    if (allAnswered) this.endQuestion(session.pin);
+  }
+
+  /** Lets the host close a question before its timer runs out (e.g. the
+   * class is clearly done, or the teacher wants to move on). Safe to call
+   * from any phase other than "question" — it's just a no-op ack there,
+   * since the button that triggers it is only shown then. */
+  skipQuestion(pin: string, hostUserId: string): GameSessionState {
+    const session = this.requireSession(pin);
+    this.assertHost(session, hostUserId);
+    if (session.phase !== "question") {
+      throw new GameError("INVALID_PHASE", "There is no active question to skip");
+    }
+    this.endQuestion(pin);
+    return session;
   }
 
   private endQuestion(pin: string) {

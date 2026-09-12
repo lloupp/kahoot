@@ -68,6 +68,7 @@ CREATE TABLE "GameParticipant" (
 CREATE TABLE "GameAnswer" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "participantId" TEXT NOT NULL,
+    "questionOrder" INTEGER NOT NULL,
     "questionText" TEXT NOT NULL,
     "choiceText" TEXT,
     "isCorrect" BOOLEAN NOT NULL,

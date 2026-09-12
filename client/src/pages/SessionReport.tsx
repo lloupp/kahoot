@@ -33,6 +33,33 @@ export function SessionReport() {
         Played {new Date(report.startedAt).toLocaleString()} · PIN {report.pin}
       </p>
 
+      {report.questionBreakdown.length > 0 && (
+        <Card className="mb-6">
+          <h2 className="mb-3 text-lg font-semibold text-slate-900">Question breakdown</h2>
+          <ul className="flex flex-col gap-2 text-sm">
+            {report.questionBreakdown.map((q) => {
+              const pct = q.answeredCount > 0 ? Math.round((q.correctCount / q.answeredCount) * 100) : 0;
+              return (
+                <li key={q.questionOrder} className="flex items-center gap-3">
+                  <span className="flex-1 text-slate-700">
+                    {q.questionOrder + 1}. {q.questionText}
+                  </span>
+                  <div className="h-4 w-32 rounded-full bg-slate-100" aria-hidden="true">
+                    <div
+                      className={`h-4 rounded-full ${pct >= 50 ? "bg-emerald-500" : "bg-red-400"}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="w-28 text-right text-slate-500">
+                    {q.correctCount}/{q.answeredCount} correct ({pct}%)
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
+
       <div className="flex flex-col gap-4">
         {report.participants.map((p) => (
           <Card key={p.id}>

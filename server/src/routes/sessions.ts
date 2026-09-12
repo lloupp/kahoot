@@ -70,7 +70,9 @@ sessionsRouter.get("/history", async (req: AuthedRequest, res, next) => {
   }
 });
 
-// Full report for a single past session.
+// Full report for a single past session, including a per-question
+// breakdown (which question the class actually struggled with) aggregated
+// across every participant's answers.
 sessionsRouter.get("/history/:id", async (req: AuthedRequest, res, next) => {
   try {
     const session = await prisma.gameSession.findUnique({
@@ -81,7 +83,24 @@ sessionsRouter.get("/history/:id", async (req: AuthedRequest, res, next) => {
     });
     if (!session) throw new HttpError(404, "Session not found");
     if (session.hostId !== req.userId) throw new HttpError(403, "You do not have access to this session");
-    res.json(session);
+
+    const byQuestion = new Map<number, { questionOrder: number; questionText: string; correctCount: number; answeredCount: number }>();
+    for (const participant of session.participants) {
+      for (const answer of participant.answers) {
+        const entry = byQuestion.get(answer.questionOrder) ?? {
+          questionOrder: answer.questionOrder,
+          questionText: answer.questionText,
+          correctCount: 0,
+          answeredCount: 0,
+        };
+        entry.answeredCount += 1;
+        if (answer.isCorrect) entry.correctCount += 1;
+        byQuestion.set(answer.questionOrder, entry);
+      }
+    }
+    const questionBreakdown = [...byQuestion.values()].sort((a, b) => a.questionOrder - b.questionOrder);
+
+    res.json({ ...session, questionBreakdown });
   } catch (err) {
     next(err);
   }

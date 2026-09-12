@@ -171,26 +171,8 @@ describe("multiplayer game flow", () => {
     // an early answerer learn (or announce) the right choice mid-question.
     expect(aliceAnswer.ok && aliceAnswer.data).toEqual({ received: true });
 
-    // Bob answers correct but slower -> should score less than Alice, more than 0.
-    await new Promise((r) => setTimeout(r, timeLimitMs * 0.5));
-    const bobAnswer = await emitAsync(bob, "student:answer", {
-      pin,
-      participantId: bobId,
-      questionId: q1.id,
-      choiceId: correctChoiceQ1,
-    });
-    expect(bobAnswer.ok).toBe(true);
-
-    // Carol answers wrong -> 0 points.
-    const carolAnswer = await emitAsync(carol, "student:answer", {
-      pin,
-      participantId: carolId,
-      questionId: q1.id,
-      choiceId: wrongChoiceQ1,
-    });
-    expect(carolAnswer.ok).toBe(true);
-
-    // A duplicate answer from the same participant must be rejected.
+    // A duplicate answer from the same participant must be rejected (Bob and
+    // Carol haven't answered yet, so the question is still genuinely open).
     const dup = await emitAsync(alice, "student:answer", {
       pin,
       participantId: aliceId,
@@ -211,7 +193,38 @@ describe("multiplayer game flow", () => {
     expect(impersonation.ok).toBe(false);
     expect(!impersonation.ok && impersonation.code).toBe("FORBIDDEN");
 
-    // Wait for the server-side timer to close the question and broadcast the reveal.
+    // Bob answers correct but slower -> should score less than Alice, more than 0.
+    await new Promise((r) => setTimeout(r, timeLimitMs * 0.5));
+    const bobAnswer = await emitAsync(bob, "student:answer", {
+      pin,
+      participantId: bobId,
+      questionId: q1.id,
+      choiceId: correctChoiceQ1,
+    });
+    expect(bobAnswer.ok).toBe(true);
+
+    // Carol is the last of the three connected players to answer -> the
+    // question should close immediately rather than waiting out the full
+    // timer, since there's no one left connected who hasn't answered.
+    const carolAnswer = await emitAsync(carol, "student:answer", {
+      pin,
+      participantId: carolId,
+      questionId: q1.id,
+      choiceId: wrongChoiceQ1,
+    });
+    expect(carolAnswer.ok).toBe(true);
+
+    // Closed for real now: even the correct participant/socket can't answer again.
+    const afterClose = await emitAsync(carol, "student:answer", {
+      pin,
+      participantId: carolId,
+      questionId: q1.id,
+      choiceId: correctChoiceQ1,
+    });
+    expect(afterClose.ok).toBe(false);
+    expect(!afterClose.ok && afterClose.code).toBe("NOT_ACCEPTING_ANSWERS");
+
+    // The reveal should have arrived promptly (early-end), not after the full timer.
     const reveal = await revealPromise;
     expect(reveal.correctChoiceId).toBe(correctChoiceQ1);
     expect(reveal.answeredCount).toBe(3);
@@ -319,6 +332,17 @@ describe("multiplayer game flow", () => {
       .set("Authorization", `Bearer ${token}`);
     expect(historyRes.status).toBe(200);
     expect(historyRes.body.some((s: any) => s.pin === pin)).toBe(true);
+
+    // Per-question breakdown: question 1 had 2/3 correct (Dave never got to
+    // answer it), question 2 had 4/4 correct.
+    const reportRes = await request(baseUrl)
+      .get(`/api/sessions/history/${persisted!.id}`)
+      .set("Authorization", `Bearer ${token}`);
+    expect(reportRes.status).toBe(200);
+    expect(reportRes.body.questionBreakdown).toEqual([
+      { questionOrder: 0, questionText: q1.text, correctCount: 2, answeredCount: 3 },
+      { questionOrder: 1, questionText: q2.text, correctCount: 4, answeredCount: 4 },
+    ]);
   });
 
   it("preserves a student's score and position across a disconnect and reconnect", async () => {
@@ -330,6 +354,10 @@ describe("multiplayer game flow", () => {
     expect(join.ok).toBe(true);
     const participantId = join.ok ? join.data.participantId : "";
     const joinToken = join.ok ? join.data.joinToken : "";
+    // A second player who never answers, so the question doesn't auto-close
+    // the moment Ephemeral answers — this test is about reconnecting mid-question.
+    const bystander = await connectClient();
+    await emitAsync(bystander, "student:join", { pin, name: "Bystander" });
 
     await emitAsync(host, "host:start-question", { pin, token });
     const q = quiz.questions[0];
@@ -428,6 +456,25 @@ describe("multiplayer game flow", () => {
     await new Promise((r) => setTimeout(r, 150));
     const rows = await prisma.gameSession.findMany({ where: { pin } });
     expect(rows.length).toBe(1);
+  });
+
+  it("lets the host skip a question before the timer runs out", async () => {
+    const { token, pin } = await setupGame(2, 30000); // a long timer we're going to skip past
+    const host = await connectClient();
+    await emitAsync(host, "host:join", { pin, token });
+    const student = await connectClient();
+    await emitAsync(student, "student:join", { pin, name: "Rusher" });
+    await emitAsync(host, "host:start-question", { pin, token });
+
+    const revealPromise = waitForEvent(host, "question:reveal");
+    const skip = await emitAsync(host, "host:skip-question", { pin, token });
+    expect(skip.ok).toBe(true);
+    await revealPromise; // resolves promptly, not after 30s
+
+    // Skipping outside of an active question is a no-op error, not a crash.
+    const skipAgain = await emitAsync(host, "host:skip-question", { pin, token });
+    expect(skipAgain.ok).toBe(false);
+    expect(!skipAgain.ok && skipAgain.code).toBe("INVALID_PHASE");
   });
 
   it("does not write a history row for a game ended from the lobby before any question started", async () => {

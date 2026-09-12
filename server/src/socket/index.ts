@@ -217,6 +217,19 @@ export function registerSocketHandlers(io: Server) {
       }
     });
 
+    socket.on("host:skip-question", (payload: { pin: string; token: string }, ack: Ack) => {
+      try {
+        const userId = requireHostToken(payload.token);
+        // Closing the question emits "question:ended" (registered above),
+        // which broadcasts the reveal and personal results — no separate
+        // broadcast needed here.
+        gameManager.skipQuestion(payload.pin, userId);
+        ok(ack);
+      } catch (err) {
+        fail(ack, err);
+      }
+    });
+
     socket.on("host:show-leaderboard", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
         const userId = requireHostToken(payload.token);

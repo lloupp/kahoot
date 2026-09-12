@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { Ack, getSocket } from "../api/socket";
 import {
@@ -22,6 +22,7 @@ const CHOICE_COLORS = ["bg-rose-500", "bg-sky-500", "bg-amber-500", "bg-emerald-
 
 export function HostSession() {
   const { pin = "" } = useParams();
+  const navigate = useNavigate();
   const { token } = useAuth();
 
   const [phase, setPhase] = useState<Phase>("connecting");
@@ -287,7 +288,7 @@ export function HostSession() {
               ))}
             </ol>
           </div>
-          <Button onClick={() => (window.location.href = "/history")}>View history</Button>
+          <Button onClick={() => navigate("/history")}>View history</Button>
         </Card>
       )}
     </div>

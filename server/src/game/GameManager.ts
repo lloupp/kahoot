@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { randomUUID } from "crypto";
 import { generatePin } from "../lib/pin";
 import { calculateScore } from "../lib/scoring";
+import { containsBlockedWord } from "../lib/nameFilter";
 import {
   GamePhase,
   GameSessionState,
@@ -145,6 +146,9 @@ export class GameManager extends EventEmitter {
     const name = rawName.trim().slice(0, MAX_NAME_LENGTH);
     if (!name) {
       throw new GameError("INVALID_NAME", "Please enter a name");
+    }
+    if (containsBlockedWord(name)) {
+      throw new GameError("INAPPROPRIATE_NAME", "Please choose a different name");
     }
     const nameTaken = [...session.participants.values()].some(
       (p) => p.name.toLowerCase() === name.toLowerCase(),

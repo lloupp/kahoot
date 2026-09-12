@@ -112,6 +112,14 @@ describe("multiplayer game flow", () => {
     expect(!second.ok && second.code).toBe("NAME_TAKEN");
   });
 
+  it("rejects a name containing a blocked word", async () => {
+    const { pin } = await setupGame(1, 5000);
+    const student = await connectClient();
+    const res = await emitAsync(student, "student:join", { pin, name: "xXfuckyouXx" });
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.code).toBe("INAPPROPRIATE_NAME");
+  });
+
   it("rejects starting a session for a quiz with no questions", async () => {
     const email = `${randomUUID()}@example.com`;
     const reg = await request(baseUrl)

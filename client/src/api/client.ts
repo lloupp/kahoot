@@ -27,9 +27,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const body = isJson ? await res.json() : undefined;
 
   if (!res.ok) {
-    throw new ApiError(res.status, body?.error ?? "Something went wrong. Please try again.");
+    throw new ApiError(res.status, extractErrorMessage(body));
   }
   return body as T;
+}
+
+interface ZodIssueLike {
+  message: string;
+  path: (string | number)[];
+}
+
+/** Prefer a specific field-level message (from the server's zod validation
+ * details) over the generic "Validation failed" — the client already
+ * validates most of this before submitting, so this mainly guards against
+ * something slipping past that check. */
+export function extractErrorMessage(body: unknown): string {
+  const b = body as { error?: string; details?: ZodIssueLike[] } | undefined;
+  const firstIssue = b?.details?.[0];
+  if (firstIssue) {
+    const field = firstIssue.path.filter((p) => typeof p === "string").join(".");
+    return field ? `${field}: ${firstIssue.message}` : firstIssue.message;
+  }
+  return b?.error ?? "Something went wrong. Please try again.";
 }
 
 export const api = {

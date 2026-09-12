@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Navigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { getSocket, Ack } from "../api/socket";
 import {
   AnswerReceipt,
@@ -32,6 +32,7 @@ const CHOICE_SHAPES = ["▲", "◆", "●", "■", "★", "⬡"];
 
 export function StudentSession() {
   const { pin = "" } = useParams();
+  const navigate = useNavigate();
   const stored = loadParticipant(pin);
 
   const [phase, setPhase] = useState<Phase>("connecting");
@@ -348,7 +349,7 @@ export function StudentSession() {
               ))}
             </ol>
           </div>
-          <Button onClick={() => (window.location.href = "/join")}>Play another game</Button>
+          <Button onClick={() => navigate("/join")}>Play another game</Button>
         </Card>
       )}
     </div>

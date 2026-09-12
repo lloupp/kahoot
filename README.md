@@ -131,8 +131,13 @@ Playwright verification instead (see the session notes for what was run).
   mitigation against casual PIN guessing, not a hard guarantee — a patient
   attacker distributed across many IPs isn't blocked by it (PIN error
   responses stay generic and games auto-expire as a backstop).
-- No profanity/impersonation filtering on student display names beyond
-  length trimming and per-session case-insensitive uniqueness.
+- Student names are checked against a small, generic blocklist
+  (`server/src/lib/nameFilter.ts`) plus length trimming and per-session
+  case-insensitive uniqueness — a basic first line of defense, not a
+  comprehensive profanity filter, and it has the classic substring-matching
+  false-positive risk (e.g. it would also reject "Scunthorpe"). A teacher
+  has no way to remove or rename a participant who slips past it or gets a
+  false positive mid-game.
 - Client tests cover logic and page-level behavior in isolation (mocked
   API/socket), not a full rendered browser flow end to end — that gap is
   covered by manual Playwright verification instead, not an automated

@@ -33,7 +33,7 @@ export function Login() {
     <div className="mx-auto flex max-w-sm flex-col gap-6 px-4 py-16">
       <h1 className="text-center text-2xl font-bold text-brand-800">Teacher login</h1>
       <Card>
-        <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
           {error && <ErrorBanner message={error} />}
           <TextField
             label="Email"

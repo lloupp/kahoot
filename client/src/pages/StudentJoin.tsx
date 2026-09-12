@@ -57,7 +57,7 @@ export function StudentJoin() {
       <h1 className="text-center text-2xl font-bold text-brand-800">Join a game</h1>
       <Card>
         {step === "pin" ? (
-          <form className="flex flex-col gap-4" onSubmit={handlePinSubmit}>
+          <form className="flex flex-col gap-4" onSubmit={handlePinSubmit} noValidate>
             {error && <ErrorBanner message={error} />}
             <TextField
               label="Game PIN"
@@ -74,7 +74,7 @@ export function StudentJoin() {
             </Button>
           </form>
         ) : (
-          <form className="flex flex-col gap-4" onSubmit={handleNameSubmit}>
+          <form className="flex flex-col gap-4" onSubmit={handleNameSubmit} noValidate>
             {error && <ErrorBanner message={error} />}
             <TextField
               label="Your name"

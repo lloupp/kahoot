@@ -72,23 +72,31 @@ start a game. Students join at `/join` with the PIN shown on the host screen
 ## Testing
 
 ```bash
-cd server && npm test        # unit + integration + multiplayer simulation
+npm test                     # both workspaces (server + client)
 npm run lint                 # both workspaces
 npm run typecheck            # both workspaces
 npm run build                # production build, both workspaces
 ```
 
-The server test suite (`server/tests/`) covers: scoring math and PIN
-generation (unit), auth and quiz-ownership REST behavior (integration via
-supertest), and a multiplayer simulation over real Socket.IO connections
-(`game.integration.test.ts`) exercising PIN-not-found, duplicate names, late
-join, late/duplicate/invalid/stale answers, answer-impersonation rejection,
-the no-correctness-leak contract, disconnect/reconnect for both students and
-the host (including a host reload mid-question/mid-leaderboard), idempotent
-game-ending, a lobby-cancel that skips writing history, and an empty-quiz
-rejection. There is currently no client-side (React component) test suite —
-the client is covered by manual browser verification (Playwright) plus
-lint/typecheck/build, not automated component or e2e tests.
+The server test suite (`server/tests/`, vitest + supertest + socket.io-client)
+covers: scoring math and PIN generation (unit), auth and quiz-ownership REST
+behavior (integration), and a multiplayer simulation over real Socket.IO
+connections (`game.integration.test.ts`) exercising PIN-not-found, duplicate
+names, late join, late/duplicate/invalid/stale answers, answer-impersonation
+rejection, the no-correctness-leak contract, disconnect/reconnect for both
+students and the host (including a host reload mid-question/mid-leaderboard),
+idempotent game-ending, the early-close-when-everyone's-answered and
+host-skip behavior, per-question analytics, a lobby-cancel that skips writing
+history, a join-throttling check, and an empty-quiz rejection.
+
+The client test suite (`client/src/**/*.test.{ts,tsx}`, vitest + React
+Testing Library + jsdom) covers the quiz-draft validation logic, the
+countdown hook, `AuthContext` (login/register/logout, localStorage
+persistence, restoring a session), and page-level behavior for Login,
+StudentJoin (including PIN format validation and server-error handling)
+and Dashboard (loading/empty/error states, start/delete/duplicate actions).
+There is no full browser e2e suite for the client — that's covered by manual
+Playwright verification instead (see the session notes for what was run).
 
 ## Production notes
 
@@ -125,5 +133,7 @@ lint/typecheck/build, not automated component or e2e tests.
   responses stay generic and games auto-expire as a backstop).
 - No profanity/impersonation filtering on student display names beyond
   length trimming and per-session case-insensitive uniqueness.
-- No automated tests for the frontend beyond `client`'s lint/typecheck/build
-  and manual browser verification — see Testing below for what does exist.
+- Client tests cover logic and page-level behavior in isolation (mocked
+  API/socket), not a full rendered browser flow end to end — that gap is
+  covered by manual Playwright verification instead, not an automated
+  e2e suite.

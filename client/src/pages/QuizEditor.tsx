@@ -2,23 +2,11 @@ import { FormEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { Quiz } from "../api/types";
+import { ChoiceDraft, QuestionDraft, validateQuizDraft } from "../lib/quizValidation";
 import { Card } from "../components/Card";
 import { TextField } from "../components/TextField";
 import { Button } from "../components/Button";
 import { ErrorBanner, Spinner } from "../components/Feedback";
-
-interface ChoiceDraft {
-  text: string;
-  isCorrect: boolean;
-}
-
-interface QuestionDraft {
-  text: string;
-  imageUrl: string;
-  timeLimitSeconds: number;
-  points: number;
-  choices: ChoiceDraft[];
-}
 
 function emptyQuestion(): QuestionDraft {
   return {
@@ -120,22 +108,9 @@ export function QuizEditor() {
     );
   }
 
-  function validate(): string | null {
-    if (!title.trim()) return "Give your quiz a title.";
-    if (questions.length === 0) return "Add at least one question.";
-    for (const [i, q] of questions.entries()) {
-      if (!q.text.trim()) return `Question ${i + 1} needs text.`;
-      if (q.choices.length < 2) return `Question ${i + 1} needs at least 2 choices.`;
-      if (q.choices.some((c) => !c.text.trim())) return `Question ${i + 1} has an empty choice.`;
-      if (!q.choices.some((c) => c.isCorrect)) return `Question ${i + 1} needs a correct answer selected.`;
-      if (q.timeLimitSeconds < 2) return `Question ${i + 1}'s time limit must be at least 2 seconds.`;
-    }
-    return null;
-  }
-
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const validationError = validate();
+    const validationError = validateQuizDraft(title, questions);
     if (validationError) {
       setError(validationError);
       return;
@@ -179,7 +154,7 @@ export function QuizEditor() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">
       <h1 className="mb-6 text-2xl font-bold text-slate-900">{isEditing ? "Edit quiz" : "New quiz"}</h1>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-6" noValidate>
         {error && <ErrorBanner message={error} />}
 
         <Card className="flex flex-col gap-4">

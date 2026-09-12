@@ -78,25 +78,37 @@ npm run typecheck            # both workspaces
 npm run build                # production build, both workspaces
 ```
 
-The server test suite (`server/tests/`, vitest + supertest + socket.io-client)
-covers: scoring math and PIN generation (unit), auth and quiz-ownership REST
-behavior (integration), and a multiplayer simulation over real Socket.IO
-connections (`game.integration.test.ts`) exercising PIN-not-found, duplicate
-names, late join, late/duplicate/invalid/stale answers, answer-impersonation
-rejection, the no-correctness-leak contract, disconnect/reconnect for both
-students and the host (including a host reload mid-question/mid-leaderboard),
-idempotent game-ending, the early-close-when-everyone's-answered and
-host-skip behavior, per-question analytics, a lobby-cancel that skips writing
-history, a join-throttling check, and an empty-quiz rejection.
+The server test suite (`server/tests/`, vitest + supertest + socket.io-client,
+54 tests) covers: scoring math, PIN generation, and the name filter (unit),
+auth and quiz-ownership REST behavior (integration), and a multiplayer
+simulation over real Socket.IO connections (`game.integration.test.ts`)
+exercising PIN-not-found, duplicate names (and that a disconnected holder's
+name frees up rather than locking out forever), late join, late/duplicate/
+invalid/stale answers, answer-impersonation rejection, the
+no-correctness-leak contract, disconnect/reconnect for both students and the
+host (including a host reload mid-question/mid-leaderboard), idempotent
+game-ending, early-close-when-everyone's-answered (including on the last
+holdout disconnecting, not just answering), host-skip as a genuine no-op
+outside an active question, per-question analytics (including a
+never-reached question reported as "unscored" rather than silently
+renumbering the rest), a lobby-cancel that skips writing history, a
+35-student-one-IP classroom join+answer regression test, a host-side PIN-scan
+throttling test, and an empty-quiz rejection.
 
 The client test suite (`client/src/**/*.test.{ts,tsx}`, vitest + React
-Testing Library + jsdom) covers the quiz-draft validation logic, the
-countdown hook, `AuthContext` (login/register/logout, localStorage
-persistence, restoring a session), and page-level behavior for Login,
-StudentJoin (including PIN format validation and server-error handling)
-and Dashboard (loading/empty/error states, start/delete/duplicate actions).
-There is no full browser e2e suite for the client — that's covered by manual
-Playwright verification instead (see the session notes for what was run).
+Testing Library + jsdom, 65 tests) covers the quiz-draft validation logic,
+the countdown hook, `AuthContext` (login/register/logout, localStorage
+persistence, restoring a session), page-level behavior for Login,
+StudentJoin (including PIN format validation and server-error handling),
+Dashboard (loading/empty/error states, start/delete actions), and the two
+most stateful screens — `HostSession` and `StudentSession` — against a fake
+socket double: the host-reload-mid-question/mid-leaderboard regression, that
+the reveal screen never marks a correct choice before the reveal event
+arrives, and that a student rejoining mid-question after already answering
+is shown "answer locked in" rather than the answer buttons or any
+correctness. There is no full browser e2e suite for the client — that's
+covered by manual Playwright verification instead (see the session notes for
+what was run).
 
 ## Production notes
 
@@ -127,10 +139,14 @@ Playwright verification instead (see the session notes for what was run).
   state out of process memory — not implemented.
 - The host can skip a question early and it also auto-closes once every
   connected player has answered, but there's no pause/resume control.
-- The join/answer/rejoin rate limiter (per-socket and per-IP) is a
-  mitigation against casual PIN guessing, not a hard guarantee — a patient
-  attacker distributed across many IPs isn't blocked by it (PIN error
-  responses stay generic and games auto-expire as a backstop).
+- Two separate rate limiters exist: a strict per-socket+per-IP one on the
+  actual PIN-guessing surface (student:join, student:rejoin, and host:join —
+  reachable by any registered account, since registration is open) and a
+  generous one on already-authenticated in-game actions (student:answer,
+  host controls) so real gameplay pacing never collides with anti-guessing
+  limits. Both are a mitigation, not a hard guarantee — a patient attacker
+  distributed across many IPs isn't blocked by them (PIN error responses
+  stay generic and games auto-expire as a backstop).
 - Student names are checked against a small, generic blocklist
   (`server/src/lib/nameFilter.ts`) plus length trimming and per-session
   case-insensitive uniqueness — a basic first line of defense, not a

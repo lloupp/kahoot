@@ -135,7 +135,7 @@ export function HostSession() {
         </div>
       )}
 
-      {phase === "error" && <ErrorBanner message={error ?? "Something went wrong."} />}
+      {phase === "error" && !error && <ErrorBanner message="Something went wrong." />}
 
       {phase === "lobby" && (
         <div className="flex flex-col items-center gap-6 text-center">

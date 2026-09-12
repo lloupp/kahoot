@@ -8,14 +8,33 @@ import { HttpError } from "../middleware/errorHandler";
 
 export const authRouter = Router();
 
-const authLimiter = rateLimit({
+const registerLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-authRouter.post("/register", authLimiter, async (req, res, next) => {
+// Login is rate-limited per IP+email rather than per IP alone: many teachers
+// at the same school share one IP, and a single shared bucket would let one
+// person's mistyped password lock out the whole staff room. A looser
+// per-IP cap still bounds someone hammering many different accounts from
+// one address.
+const loginPerAccountLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.ip}:${String(req.body?.email ?? "").toLowerCase()}`,
+});
+const loginPerIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+authRouter.post("/register", registerLimiter, async (req, res, next) => {
   try {
     const data = registerSchema.parse(req.body);
     const existing = await prisma.user.findUnique({ where: { email: data.email } });
@@ -33,7 +52,7 @@ authRouter.post("/register", authLimiter, async (req, res, next) => {
   }
 });
 
-authRouter.post("/login", authLimiter, async (req, res, next) => {
+authRouter.post("/login", loginPerIpLimiter, loginPerAccountLimiter, async (req, res, next) => {
   try {
     const data = loginSchema.parse(req.body);
     const user = await prisma.user.findUnique({ where: { email: data.email } });

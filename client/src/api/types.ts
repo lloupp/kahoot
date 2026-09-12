@@ -69,6 +69,7 @@ export interface QuestionBreakdown {
   questionText: string;
   correctCount: number;
   answeredCount: number;
+  totalPlayers: number;
 }
 
 export interface SessionReport {
@@ -79,4 +80,5 @@ export interface SessionReport {
   quizTitle: string;
   participants: SessionParticipantReport[];
   questionBreakdown: QuestionBreakdown[];
+  unscoredQuestionCount: number;
 }

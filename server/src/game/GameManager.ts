@@ -150,8 +150,13 @@ export class GameManager extends EventEmitter {
     if (containsBlockedWord(name)) {
       throw new GameError("INAPPROPRIATE_NAME", "Please choose a different name");
     }
+    // Only collide against currently-connected participants. A participant
+    // marked disconnected might just be a student whose tab was recycled
+    // (sessionStorage identity lost, common on mobile) — without this, that
+    // name is permanently unusable for the rest of the game, locking them
+    // out entirely rather than letting them rejoin fresh under it.
     const nameTaken = [...session.participants.values()].some(
-      (p) => p.name.toLowerCase() === name.toLowerCase(),
+      (p) => p.connected && p.name.toLowerCase() === name.toLowerCase(),
     );
     if (nameTaken) {
       throw new GameError("NAME_TAKEN", "That name is already taken in this game");

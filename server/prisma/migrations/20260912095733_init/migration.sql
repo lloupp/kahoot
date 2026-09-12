@@ -47,6 +47,7 @@ CREATE TABLE "GameSession" (
     "pin" TEXT NOT NULL,
     "quizId" TEXT,
     "quizTitle" TEXT NOT NULL,
+    "questionCount" INTEGER NOT NULL DEFAULT 0,
     "hostId" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'finished',
     "startedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

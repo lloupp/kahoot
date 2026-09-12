@@ -9,6 +9,7 @@ export async function persistFinishedSession(session: GameSessionState, status: 
       pin: session.pin,
       quizId: session.quizId,
       quizTitle: session.quizTitle,
+      questionCount: session.questions.length,
       hostId: session.hostUserId,
       status,
       startedAt: new Date(session.firstQuestionAt ?? session.createdAt),

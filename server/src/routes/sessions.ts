@@ -84,7 +84,11 @@ sessionsRouter.get("/history/:id", async (req: AuthedRequest, res, next) => {
     if (!session) throw new HttpError(404, "Session not found");
     if (session.hostId !== req.userId) throw new HttpError(403, "You do not have access to this session");
 
-    const byQuestion = new Map<number, { questionOrder: number; questionText: string; correctCount: number; answeredCount: number }>();
+    const totalPlayers = session.participants.length;
+    const byQuestion = new Map<
+      number,
+      { questionOrder: number; questionText: string; correctCount: number; answeredCount: number; totalPlayers: number }
+    >();
     for (const participant of session.participants) {
       for (const answer of participant.answers) {
         const entry = byQuestion.get(answer.questionOrder) ?? {
@@ -92,15 +96,25 @@ sessionsRouter.get("/history/:id", async (req: AuthedRequest, res, next) => {
           questionText: answer.questionText,
           correctCount: 0,
           answeredCount: 0,
+          totalPlayers,
         };
         entry.answeredCount += 1;
         if (answer.isCorrect) entry.correctCount += 1;
         byQuestion.set(answer.questionOrder, entry);
       }
     }
+    // "% correct" is out of the whole class (totalPlayers), not just those
+    // who managed to answer — otherwise a question everyone timed out on
+    // except the two who guessed right would show as 100% correct, which
+    // inverts exactly the signal this feature exists to show a teacher.
     const questionBreakdown = [...byQuestion.values()].sort((a, b) => a.questionOrder - b.questionOrder);
+    // A question with zero recorded answers leaves no trace in the data at
+    // all, so this can't distinguish "skipped/never reached" from "everyone
+    // ran out the timer with no answer" — it's reported as one honest,
+    // unified count rather than a guess at which case it was.
+    const unscoredQuestionCount = Math.max(0, session.questionCount - questionBreakdown.length);
 
-    res.json({ ...session, questionBreakdown });
+    res.json({ ...session, questionBreakdown, unscoredQuestionCount });
   } catch (err) {
     next(err);
   }

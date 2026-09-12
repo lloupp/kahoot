@@ -112,6 +112,23 @@ describe("multiplayer game flow", () => {
     expect(!second.ok && second.code).toBe("NAME_TAKEN");
   });
 
+  it("frees up a name once its holder disconnects, instead of a permanent lockout", async () => {
+    // A recycled mobile tab loses its sessionStorage identity, so the only
+    // way back in is a fresh student:join under the same name. Before this
+    // fix that was rejected as NAME_TAKEN forever, since the original
+    // participant record never goes away — just its connection.
+    const { pin } = await setupGame(1, 5000);
+    const original = await connectClient();
+    const first = await emitAsync(original, "student:join", { pin, name: "Alice" });
+    expect(first.ok).toBe(true);
+    original.disconnect();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const recovered = await connectClient();
+    const second = await emitAsync(recovered, "student:join", { pin, name: "Alice" });
+    expect(second.ok).toBe(true);
+  });
+
   it("rejects a name containing a blocked word", async () => {
     const { pin } = await setupGame(1, 5000);
     const student = await connectClient();
@@ -341,16 +358,19 @@ describe("multiplayer game flow", () => {
     expect(historyRes.status).toBe(200);
     expect(historyRes.body.some((s: any) => s.pin === pin)).toBe(true);
 
-    // Per-question breakdown: question 1 had 2/3 correct (Dave never got to
-    // answer it), question 2 had 4/4 correct.
+    // Per-question breakdown: question 1 had 2/3 correct answers but the
+    // percentage is out of all 4 players (Dave never got to answer it),
+    // question 2 had 4/4 correct — both questions were reached, so nothing
+    // is reported as unscored.
     const reportRes = await request(baseUrl)
       .get(`/api/sessions/history/${persisted!.id}`)
       .set("Authorization", `Bearer ${token}`);
     expect(reportRes.status).toBe(200);
     expect(reportRes.body.questionBreakdown).toEqual([
-      { questionOrder: 0, questionText: q1.text, correctCount: 2, answeredCount: 3 },
-      { questionOrder: 1, questionText: q2.text, correctCount: 4, answeredCount: 4 },
+      { questionOrder: 0, questionText: q1.text, correctCount: 2, answeredCount: 3, totalPlayers: 4 },
+      { questionOrder: 1, questionText: q2.text, correctCount: 4, answeredCount: 4, totalPlayers: 4 },
     ]);
+    expect(reportRes.body.unscoredQuestionCount).toBe(0);
   });
 
   it("preserves a student's score and position across a disconnect and reconnect", async () => {
@@ -464,6 +484,48 @@ describe("multiplayer game flow", () => {
     await new Promise((r) => setTimeout(r, 150));
     const rows = await prisma.gameSession.findMany({ where: { pin } });
     expect(rows.length).toBe(1);
+  });
+
+  it("reports a never-reached question as unscored rather than silently renumbering the rest", async () => {
+    const { token, quiz, pin } = await setupGame(3, 3000);
+    const host = await connectClient();
+    await emitAsync(host, "host:join", { pin, token });
+    const student = await connectClient();
+    const join = await emitAsync(student, "student:join", { pin, name: "Solo" });
+    const participantId = join.ok ? join.data.participantId : "";
+
+    // Answer Q1, skip Q2 entirely (no one answers), then end after Q2 closes
+    // without ever starting Q3.
+    await emitAsync(host, "host:start-question", { pin, token });
+    const q1 = quiz.questions[0];
+    await emitAsync(student, "student:answer", {
+      pin,
+      participantId,
+      questionId: q1.id,
+      choiceId: q1.choices.find((c: any) => c.isCorrect).id,
+    });
+    await emitAsync(host, "host:show-leaderboard", { pin, token });
+    const q2RevealPromise = waitForEvent(host, "question:reveal");
+    await emitAsync(host, "host:next", { pin, token }); // starts Q2
+    await emitAsync(host, "host:skip-question", { pin, token }); // closes Q2 with 0 answers
+    await q2RevealPromise;
+    await emitAsync(host, "host:show-leaderboard", { pin, token });
+    const gameOverPromise = waitForEvent(host, "game:over");
+    await emitAsync(host, "host:end-game", { pin, token }); // ends before Q3 ever starts
+    await gameOverPromise;
+
+    await new Promise((r) => setTimeout(r, 150));
+    const persisted = await prisma.gameSession.findFirst({ where: { pin } });
+    const reportRes = await request(baseUrl)
+      .get(`/api/sessions/history/${persisted!.id}`)
+      .set("Authorization", `Bearer ${token}`);
+    expect(reportRes.status).toBe(200);
+    // Only Q1 has any recorded answer; Q2 (skipped, 0 answers) and Q3
+    // (never started) both fall out of the breakdown entirely.
+    expect(reportRes.body.questionBreakdown).toEqual([
+      { questionOrder: 0, questionText: q1.text, correctCount: 1, answeredCount: 1, totalPlayers: 1 },
+    ]);
+    expect(reportRes.body.unscoredQuestionCount).toBe(2);
   });
 
   it("closes the question when the last unanswered player disconnects, not just when they answer", async () => {

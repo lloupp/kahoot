@@ -58,6 +58,10 @@ model GameSession {
   quizId       String?
   quiz         Quiz?               @relation(fields: [quizId], references: [id], onDelete: SetNull)
   quizTitle    String
+  // Total questions in the quiz as it was actually played — lets the report
+  // tell "this question was never reached" apart from "no one answered it",
+  // since a skipped/never-reached question otherwise leaves no trace at all.
+  questionCount Int                @default(0)
   hostId       String
   status       String              @default("finished")
   startedAt    DateTime            @default(now())

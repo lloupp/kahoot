@@ -33,12 +33,15 @@ export function SessionReport() {
         Played {new Date(report.startedAt).toLocaleString()} · PIN {report.pin}
       </p>
 
-      {report.questionBreakdown.length > 0 && (
+      {(report.questionBreakdown.length > 0 || report.unscoredQuestionCount > 0) && (
         <Card className="mb-6">
           <h2 className="mb-3 text-lg font-semibold text-slate-900">Question breakdown</h2>
           <ul className="flex flex-col gap-2 text-sm">
             {report.questionBreakdown.map((q) => {
-              const pct = q.answeredCount > 0 ? Math.round((q.correctCount / q.answeredCount) * 100) : 0;
+              // Out of every player who was in the game, not just those who
+              // answered — a question everyone timed out on except one lucky
+              // guess should read as the class struggling, not "100%".
+              const pct = q.totalPlayers > 0 ? Math.round((q.correctCount / q.totalPlayers) * 100) : 0;
               return (
                 <li key={q.questionOrder} className="flex items-center gap-3">
                   <span className="flex-1 text-slate-700">
@@ -50,13 +53,19 @@ export function SessionReport() {
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  <span className="w-28 text-right text-slate-500">
-                    {q.correctCount}/{q.answeredCount} correct ({pct}%)
+                  <span className="w-36 text-right text-slate-500">
+                    {q.correctCount}/{q.totalPlayers} correct ({pct}%)
                   </span>
                 </li>
               );
             })}
           </ul>
+          {report.unscoredQuestionCount > 0 && (
+            <p className="mt-3 text-xs text-slate-400">
+              {report.unscoredQuestionCount} question{report.unscoredQuestionCount === 1 ? "" : "s"} skipped or never
+              reached, and had no recorded answers — not shown above.
+            </p>
+          )}
         </Card>
       )}
 

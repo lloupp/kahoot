@@ -168,7 +168,7 @@ export function HostSession() {
           </Card>
           <Button
             size="lg"
-            disabled={actionPending || !lobby || lobby.players.length === 0}
+            disabled={actionPending || !lobby || !lobby.players.some((p) => p.connected)}
             onClick={() => callHost("host:start-question")}
           >
             Start game

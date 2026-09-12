@@ -33,4 +33,31 @@ describe("containsBlockedWord", () => {
     // teacher can't override it, which is documented in the README.
     expect(containsBlockedWord("Scunthorpe")).toBe(true);
   });
+
+  it("catches repeated-letter evasion by collapsing runs before matching", () => {
+    expect(containsBlockedWord("fuuuck")).toBe(true);
+    expect(containsBlockedWord("shiiiit")).toBe(true);
+  });
+
+  it("catches ph->f and v->u substitution evasion", () => {
+    expect(containsBlockedWord("phuck")).toBe(true);
+    expect(containsBlockedWord("fvck")).toBe(true);
+  });
+
+  it("catches slurs and harassment terms beyond the original small list", () => {
+    for (const name of ["Hitler", "Nazi", "sieg heil", "rape", "kys", "whore", "slut", "wanker"]) {
+      expect(containsBlockedWord(name)).toBe(true);
+    }
+  });
+
+  it("blocks bare impersonation of an authority figure, exact match only", () => {
+    expect(containsBlockedWord("admin")).toBe(true);
+    expect(containsBlockedWord("ADMIN")).toBe(true);
+    expect(containsBlockedWord("host")).toBe(true);
+    expect(containsBlockedWord("teacher")).toBe(true);
+    // Known gap, accepted rather than hidden: decorated impersonation
+    // attempts pass, since blocking "teacher" as a substring would also
+    // catch real names/words containing it (kept exact-match only).
+    expect(containsBlockedWord("Mr Teacher")).toBe(false);
+  });
 });

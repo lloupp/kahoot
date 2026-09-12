@@ -416,6 +416,7 @@ export class GameManager extends EventEmitter {
 
   shutdown() {
     clearInterval(this.cleanupInterval);
+    this.removeAllListeners();
   }
 }
 

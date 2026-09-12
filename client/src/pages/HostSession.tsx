@@ -9,6 +9,7 @@ import {
   PublicQuestion,
   QuestionStartPayload,
   RevealPayload,
+  SessionSnapshot,
 } from "../api/gameTypes";
 import { Card } from "../components/Card";
 import { Button } from "../components/Button";
@@ -40,7 +41,7 @@ export function HostSession() {
     const socket = getSocket();
 
     async function joinAsHost() {
-      const res = await new Promise<Ack<{ phase: Phase; lobby: LobbyPayload }>>((resolve) => {
+      const res = await new Promise<Ack<SessionSnapshot>>((resolve) => {
         socket.emit("host:join", { pin, token }, resolve);
       });
       if (!res.ok) {
@@ -48,8 +49,16 @@ export function HostSession() {
         setPhase("error");
         return;
       }
-      setLobby(res.data.lobby);
-      setPhase(res.data.phase === "lobby" ? "lobby" : res.data.phase);
+      const data = res.data;
+      setLobby(data.lobby);
+      if (data.question) {
+        setQuestionMeta(data.question);
+        setQuestion(data.question.question);
+      }
+      setReveal(data.reveal);
+      setLeaderboard(data.leaderboard);
+      setPodium(data.podium);
+      setPhase(data.phase);
     }
 
     function onLobbyUpdate(data: LobbyPayload) {
@@ -131,7 +140,7 @@ export function HostSession() {
         <div className="flex flex-col items-center gap-6 text-center">
           <div>
             <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Game PIN</p>
-            <p className="text-6xl font-extrabold tracking-widest text-brand-700">{pin}</p>
+            <p className="text-4xl font-extrabold tracking-widest text-brand-700 sm:text-6xl">{pin}</p>
             <p className="mt-2 text-slate-500">Students go to the join page and enter this PIN.</p>
           </div>
           <Card className="w-full">
@@ -189,7 +198,7 @@ export function HostSession() {
               ))}
             </div>
           </Card>
-          <p className="text-center text-slate-500">Waiting for the timer to end, or for everyone to answer...</p>
+          <p className="text-center text-slate-500">Waiting for the timer to end...</p>
         </div>
       )}
 
@@ -206,7 +215,7 @@ export function HostSession() {
               const isCorrect = c.id === reveal.correctChoiceId;
               return (
                 <div key={c.id} className="flex items-center gap-3">
-                  <span className={`w-40 truncate text-sm font-medium ${isCorrect ? "text-emerald-700" : "text-slate-600"}`}>
+                  <span className={`w-20 truncate text-sm font-medium sm:w-40 ${isCorrect ? "text-emerald-700" : "text-slate-600"}`}>
                     {isCorrect ? "✓ " : ""}
                     {c.text}
                   </span>

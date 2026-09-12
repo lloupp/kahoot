@@ -139,6 +139,9 @@ describe("multiplayer game flow", () => {
     const wrongChoiceQ1 = q1.choices.find((c: any) => !c.isCorrect).id;
 
     const revealPromise = waitForEvent(alice, "question:reveal");
+    const aliceResultPromise = waitForEvent(alice, "answer:result");
+    const bobResultPromise = waitForEvent(bob, "answer:result");
+    const carolResultPromise = waitForEvent(carol, "answer:result");
     const startAck = await emitAsync(host, "host:start-question", { pin, token });
     expect(startAck.ok).toBe(true);
 
@@ -150,6 +153,9 @@ describe("multiplayer game flow", () => {
       choiceId: correctChoiceQ1,
     });
     expect(aliceAnswer.ok).toBe(true);
+    // The immediate ack must never leak correctness/points — that would let
+    // an early answerer learn (or announce) the right choice mid-question.
+    expect(aliceAnswer.ok && aliceAnswer.data).toEqual({ received: true });
 
     // Bob answers correct but slower -> should score less than Alice, more than 0.
     await new Promise((r) => setTimeout(r, timeLimitMs * 0.5));
@@ -170,15 +176,6 @@ describe("multiplayer game flow", () => {
     });
     expect(carolAnswer.ok).toBe(true);
 
-    if (aliceAnswer.ok && bobAnswer.ok && carolAnswer.ok) {
-      expect(aliceAnswer.data.isCorrect).toBe(true);
-      expect(bobAnswer.data.isCorrect).toBe(true);
-      expect(carolAnswer.data.isCorrect).toBe(false);
-      expect(carolAnswer.data.pointsAwarded).toBe(0);
-      expect(aliceAnswer.data.pointsAwarded).toBeGreaterThan(bobAnswer.data.pointsAwarded);
-      expect(bobAnswer.data.pointsAwarded).toBeGreaterThan(0);
-    }
-
     // A duplicate answer from the same participant must be rejected.
     const dup = await emitAsync(alice, "student:answer", {
       pin,
@@ -189,12 +186,36 @@ describe("multiplayer game flow", () => {
     expect(dup.ok).toBe(false);
     expect(!dup.ok && dup.code).toBe("ALREADY_ANSWERED");
 
+    // One student cannot submit an answer on another's behalf, even knowing
+    // their participant id (which is visible in lobby/leaderboard payloads).
+    const impersonation = await emitAsync(bob, "student:answer", {
+      pin,
+      participantId: carolId, // Bob's socket, Carol's id
+      questionId: q1.id,
+      choiceId: correctChoiceQ1,
+    });
+    expect(impersonation.ok).toBe(false);
+    expect(!impersonation.ok && impersonation.code).toBe("FORBIDDEN");
+
     // Wait for the server-side timer to close the question and broadcast the reveal.
     const reveal = await revealPromise;
     expect(reveal.correctChoiceId).toBe(correctChoiceQ1);
     expect(reveal.answeredCount).toBe(3);
     expect(reveal.counts[correctChoiceQ1]).toBe(2);
     expect(reveal.counts[wrongChoiceQ1]).toBe(1);
+
+    // Personal correctness/points are only delivered once the question has
+    // closed for everyone, directly to each participant's own socket.
+    const [aliceResult, bobResult, carolResult] = await Promise.all([
+      aliceResultPromise,
+      bobResultPromise,
+      carolResultPromise,
+    ]);
+    expect(aliceResult).toMatchObject({ answered: true, isCorrect: true });
+    expect(bobResult).toMatchObject({ answered: true, isCorrect: true });
+    expect(carolResult).toMatchObject({ answered: true, isCorrect: false, pointsAwarded: 0 });
+    expect(aliceResult.pointsAwarded).toBeGreaterThan(bobResult.pointsAwarded);
+    expect(bobResult.pointsAwarded).toBeGreaterThan(0);
 
     // Answering after the question has closed must be rejected even with a fresh joiner.
     const dave = await connectClient();
@@ -306,11 +327,13 @@ describe("multiplayer game flow", () => {
       choiceId: correctChoice,
     });
     expect(answer.ok).toBe(true);
-    const scoreBefore = answer.ok ? answer.data.totalScore : -1;
+    expect(answer.ok && answer.data).toEqual({ received: true });
+    const session = gameManager.getByPin(pin);
+    const scoreBefore = session?.participants.get(participantId)?.totalScore ?? -1;
+    expect(scoreBefore).toBeGreaterThan(0);
 
     student.disconnect();
     await new Promise((r) => setTimeout(r, 50));
-    const session = gameManager.getByPin(pin);
     expect(session?.participants.get(participantId)?.connected).toBe(false);
     expect(session?.participants.get(participantId)?.totalScore).toBe(scoreBefore);
 
@@ -318,6 +341,9 @@ describe("multiplayer game flow", () => {
     const rejoin = await emitAsync(reconnected, "student:rejoin", { pin, participantId, joinToken });
     expect(rejoin.ok).toBe(true);
     expect(rejoin.ok && rejoin.data.phase).toBe("question");
+    expect(rejoin.ok && rejoin.data.hasAnsweredCurrentQuestion).toBe(true);
+    // Correctness must still be withheld on rejoin while the question is open.
+    expect(rejoin.ok && rejoin.data.myResult).toBeNull();
     expect(session?.participants.get(participantId)?.connected).toBe(true);
 
     await emitAsync(host, "host:end-game", { pin, token });
@@ -341,6 +367,66 @@ describe("multiplayer game flow", () => {
 
     const startAck = await emitAsync(newHostSocket, "host:start-question", { pin, token });
     expect(startAck.ok).toBe(true);
+  });
+
+  it("gives a host who reloads mid-question a working snapshot, not just a bare phase", async () => {
+    const { token, pin } = await setupGame(1, 3000);
+    const host1 = await connectClient();
+    await emitAsync(host1, "host:join", { pin, token });
+    await emitAsync(host1, "host:start-question", { pin, token });
+
+    // Simulate a page reload: a brand new socket re-attaches as the host mid-question.
+    const host2 = await connectClient();
+    const rejoin = await emitAsync(host2, "host:join", { pin, token });
+    expect(rejoin.ok).toBe(true);
+    expect(rejoin.ok && rejoin.data.phase).toBe("question");
+    // This is the actual bug: previously only {phase, lobby} came back, so a
+    // reloaded host had no question to render and the game was stuck.
+    expect(rejoin.ok && rejoin.data.question?.question).not.toBeNull();
+
+    // And still fully in control from the new socket.
+    const revealPromise = waitForEvent(host2, "question:reveal");
+    await revealPromise;
+    const showBoard = await emitAsync(host2, "host:show-leaderboard", { pin, token });
+    expect(showBoard.ok).toBe(true);
+
+    // Reload again, now mid-leaderboard.
+    const host3 = await connectClient();
+    const rejoin2 = await emitAsync(host3, "host:join", { pin, token });
+    expect(rejoin2.ok).toBe(true);
+    expect(rejoin2.ok && rejoin2.data.phase).toBe("leaderboard");
+    expect(rejoin2.ok && rejoin2.data.leaderboard).not.toBeNull();
+  });
+
+  it("makes ending a game idempotent: a duplicate end-game call does not double-persist or re-broadcast", async () => {
+    const { token, pin } = await setupGame(1, 3000);
+    const host = await connectClient();
+    await emitAsync(host, "host:join", { pin, token });
+    const student = await connectClient();
+    await emitAsync(student, "student:join", { pin, name: "Solo" });
+    await emitAsync(host, "host:start-question", { pin, token });
+
+    const first = await emitAsync(host, "host:end-game", { pin, token });
+    expect(first.ok).toBe(true);
+    const second = await emitAsync(host, "host:end-game", { pin, token });
+    expect(second.ok).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 150));
+    const rows = await prisma.gameSession.findMany({ where: { pin } });
+    expect(rows.length).toBe(1);
+  });
+
+  it("does not write a history row for a game ended from the lobby before any question started", async () => {
+    const { token, pin } = await setupGame(1, 3000);
+    const host = await connectClient();
+    await emitAsync(host, "host:join", { pin, token });
+
+    const ended = await emitAsync(host, "host:end-game", { pin, token });
+    expect(ended.ok).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 150));
+    const rows = await prisma.gameSession.findMany({ where: { pin } });
+    expect(rows.length).toBe(0);
   });
 
   it("rejects host actions from a token that does not own the session", async () => {

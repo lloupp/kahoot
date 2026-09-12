@@ -57,8 +57,25 @@ export interface PodiumPayload {
   ranking: LeaderboardEntry[];
 }
 
-export interface AnswerAck {
-  isCorrect: boolean;
-  pointsAwarded: number;
-  totalScore: number;
+export interface AnswerReceipt {
+  received: true;
+}
+
+/** Correctness is delivered separately, once the question closes for
+ * everyone — never in the immediate submit acknowledgment. */
+export type PersonalResult = { answered: false } | { answered: true; isCorrect: boolean; pointsAwarded: number; totalScore: number };
+
+export interface SessionSnapshot {
+  phase: "lobby" | "question" | "reveal" | "leaderboard" | "podium";
+  quizTitle: string;
+  lobby: LobbyPayload;
+  question: QuestionStartPayload | null;
+  reveal: RevealPayload | null;
+  leaderboard: LeaderboardPayload | null;
+  podium: PodiumPayload | null;
+}
+
+export interface StudentSessionSnapshot extends SessionSnapshot {
+  myResult: PersonalResult | null;
+  hasAnsweredCurrentQuestion: boolean;
 }

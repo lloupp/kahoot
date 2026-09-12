@@ -20,20 +20,22 @@ function fail(ack: Ack, err: unknown) {
 }
 
 // Cheap brute-force guard against PIN scanning: a socket gets a handful of
-// join attempts per minute before further attempts are throttled.
-const JOIN_ATTEMPT_LIMIT = 8;
-const JOIN_ATTEMPT_WINDOW_MS = 60 * 1000;
-const joinAttempts = new Map<string, { count: number; windowStart: number }>();
+// join attempts per minute before further attempts are throttled. This is a
+// mitigation, not a hard guarantee — a determined attacker can open new
+// sockets — so PIN error responses stay generic and games auto-expire.
+const ATTEMPT_LIMIT = 8;
+const ATTEMPT_WINDOW_MS = 60 * 1000;
+const attemptsBySocket = new Map<string, { count: number; windowStart: number }>();
 
-function registerJoinAttempt(socketId: string): boolean {
+function registerAttempt(socketId: string): boolean {
   const now = Date.now();
-  const entry = joinAttempts.get(socketId);
-  if (!entry || now - entry.windowStart > JOIN_ATTEMPT_WINDOW_MS) {
-    joinAttempts.set(socketId, { count: 1, windowStart: now });
+  const entry = attemptsBySocket.get(socketId);
+  if (!entry || now - entry.windowStart > ATTEMPT_WINDOW_MS) {
+    attemptsBySocket.set(socketId, { count: 1, windowStart: now });
     return true;
   }
   entry.count += 1;
-  return entry.count <= JOIN_ATTEMPT_LIMIT;
+  return entry.count <= ATTEMPT_LIMIT;
 }
 
 function requireHostToken(token: string): string {
@@ -114,11 +116,65 @@ function podiumPayload(session: GameSessionState) {
   return { podium: ranking.slice(0, 3), ranking };
 }
 
+/** Full state snapshot used to resume either role (host reload or student
+ * reconnect) into whatever phase the game is actually in, instead of only
+ * the bare phase name — a host who refreshes mid-question or mid-reveal
+ * must land back on a working screen, not a blank one. */
+function sessionSnapshot(session: GameSessionState) {
+  return {
+    phase: session.phase,
+    quizTitle: session.quizTitle,
+    lobby: lobbyPayload(session),
+    question: gameManager.getCurrentQuestion(session) ? questionStartPayload(session) : null,
+    reveal: session.phase === "reveal" ? revealPayload(session) : null,
+    leaderboard: session.phase === "leaderboard" ? leaderboardPayload(session) : null,
+    podium: session.phase === "podium" ? podiumPayload(session) : null,
+  };
+}
+
+/** Only ever call this once a question has actually closed (reveal or
+ * later) — it exposes correctness, which must never reach a student while
+ * their classmates could still be answering the same question. */
+function personalResultPayload(session: GameSessionState, participantId: string) {
+  const question = gameManager.getCurrentQuestion(session);
+  if (!question) return null;
+  const participant = session.participants.get(participantId);
+  const answer = participant?.answers.get(question.id);
+  if (!answer) return { answered: false as const };
+  return {
+    answered: true as const,
+    isCorrect: answer.isCorrect,
+    pointsAwarded: answer.pointsAwarded,
+    totalScore: participant!.totalScore,
+  };
+}
+
+/** Safe to reveal at any phase — whether they've answered, not whether they were right. */
+function hasAnsweredCurrentQuestion(session: GameSessionState, participantId: string): boolean {
+  const question = gameManager.getCurrentQuestion(session);
+  if (!question) return false;
+  return Boolean(session.participants.get(participantId)?.answers.has(question.id));
+}
+
+const QUESTION_CLOSED_PHASES = new Set(["reveal", "leaderboard", "podium"]);
+
 export function registerSocketHandlers(io: Server) {
   gameManager.on("question:ended", (pin: string) => {
     const session = gameManager.getByPin(pin);
     if (!session) return;
     io.to(roomName(pin)).emit("question:reveal", revealPayload(session));
+    // Correctness is only ever revealed once the question has closed for
+    // everyone, and only to the participant who owns the answer — sent
+    // directly to their socket rather than broadcast to the room.
+    for (const participant of session.participants.values()) {
+      if (participant.socketId) {
+        io.to(participant.socketId).emit("answer:result", personalResultPayload(session, participant.id));
+      }
+    }
+  });
+
+  gameManager.on("session:abandoned", (session: GameSessionState) => {
+    persistFinishedSession(session, "abandoned").catch((e) => console.error("Failed to persist abandoned session", e));
   });
 
   io.on("connection", (socket: Socket) => {
@@ -127,7 +183,7 @@ export function registerSocketHandlers(io: Server) {
         const userId = requireHostToken(payload.token);
         const session = gameManager.attachHostSocket(payload.pin, userId, socket.id);
         socket.join(roomName(payload.pin));
-        ok(ack, { phase: session.phase, lobby: lobbyPayload(session) });
+        ok(ack, sessionSnapshot(session));
       } catch (err) {
         fail(ack, err);
       }
@@ -155,6 +211,19 @@ export function registerSocketHandlers(io: Server) {
       }
     });
 
+    function finishGame(pin: string, hostUserId: string): { ended: boolean } {
+      const { session, alreadyEnded } = gameManager.endGame(pin, hostUserId);
+      if (!alreadyEnded) {
+        io.to(roomName(pin)).emit("game:over", podiumPayload(session));
+        // A game ended straight from the lobby (no question ever started)
+        // has nothing worth reporting — skip writing a zero-player history row.
+        if (session.currentQuestionIndex >= 0) {
+          persistFinishedSession(session).catch((e) => console.error("Failed to persist session", e));
+        }
+      }
+      return { ended: true };
+    }
+
     socket.on("host:next", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
         const userId = requireHostToken(payload.token);
@@ -165,11 +234,7 @@ export function registerSocketHandlers(io: Server) {
           io.to(roomName(payload.pin)).emit("question:start", questionStartPayload(updated));
           ok(ack, { ended: false });
         } else {
-          const ended = gameManager.endGame(payload.pin, userId);
-          const payloadOut = podiumPayload(ended);
-          io.to(roomName(payload.pin)).emit("game:over", payloadOut);
-          persistFinishedSession(ended).catch((e) => console.error("Failed to persist session", e));
-          ok(ack, { ended: true });
+          ok(ack, finishGame(payload.pin, userId));
         }
       } catch (err) {
         fail(ack, err);
@@ -179,11 +244,7 @@ export function registerSocketHandlers(io: Server) {
     socket.on("host:end-game", (payload: { pin: string; token: string }, ack: Ack) => {
       try {
         const userId = requireHostToken(payload.token);
-        const ended = gameManager.endGame(payload.pin, userId);
-        const payloadOut = podiumPayload(ended);
-        io.to(roomName(payload.pin)).emit("game:over", payloadOut);
-        persistFinishedSession(ended).catch((e) => console.error("Failed to persist session", e));
-        ok(ack);
+        ok(ack, finishGame(payload.pin, userId));
       } catch (err) {
         fail(ack, err);
       }
@@ -191,7 +252,7 @@ export function registerSocketHandlers(io: Server) {
 
     socket.on("student:join", (payload: { pin: string; name: string }, ack: Ack) => {
       try {
-        if (!registerJoinAttempt(socket.id)) {
+        if (!registerAttempt(socket.id)) {
           throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
         }
         const participant = gameManager.joinAsStudent(payload.pin, payload.name);
@@ -213,6 +274,9 @@ export function registerSocketHandlers(io: Server) {
       "student:rejoin",
       (payload: { pin: string; participantId: string; joinToken: string }, ack: Ack) => {
         try {
+          if (!registerAttempt(socket.id)) {
+            throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
+          }
           const session = gameManager.rejoinStudent(
             payload.pin,
             payload.participantId,
@@ -221,13 +285,11 @@ export function registerSocketHandlers(io: Server) {
           );
           socket.join(roomName(payload.pin));
           io.to(roomName(payload.pin)).emit("lobby:update", lobbyPayload(session));
-          const currentQuestion = gameManager.getCurrentQuestion(session);
+          const questionClosed = QUESTION_CLOSED_PHASES.has(session.phase);
           ok(ack, {
-            phase: session.phase,
-            quizTitle: session.quizTitle,
-            question: currentQuestion ? questionStartPayload(session) : null,
-            leaderboard: session.phase === "leaderboard" ? leaderboardPayload(session) : null,
-            podium: session.phase === "podium" ? podiumPayload(session) : null,
+            ...sessionSnapshot(session),
+            myResult: questionClosed ? personalResultPayload(session, payload.participantId) : null,
+            hasAnsweredCurrentQuestion: hasAnsweredCurrentQuestion(session, payload.participantId),
           });
         } catch (err) {
           fail(ack, err);
@@ -242,18 +304,20 @@ export function registerSocketHandlers(io: Server) {
         ack: Ack,
       ) => {
         try {
-          const participant = gameManager.submitAnswer(
+          if (!registerAttempt(socket.id)) {
+            throw new GameError("RATE_LIMITED", "Too many attempts, please wait a moment and try again");
+          }
+          gameManager.submitAnswer(
             payload.pin,
             payload.participantId,
             payload.questionId,
             payload.choiceId,
+            socket.id,
           );
-          const answer = participant.answers.get(payload.questionId)!;
-          ok(ack, {
-            isCorrect: answer.isCorrect,
-            pointsAwarded: answer.pointsAwarded,
-            totalScore: participant.totalScore,
-          });
+          // Correctness/points are intentionally withheld here — see
+          // question:ended above — so an early answer can never leak the
+          // correct choice to the rest of the class before time is up.
+          ok(ack, { received: true });
         } catch (err) {
           fail(ack, err);
         }
@@ -261,7 +325,7 @@ export function registerSocketHandlers(io: Server) {
     );
 
     socket.on("disconnect", () => {
-      joinAttempts.delete(socket.id);
+      attemptsBySocket.delete(socket.id);
       const result = gameManager.handleDisconnect(socket.id);
       if (!result) return;
       const session = gameManager.getByPin(result.pin);

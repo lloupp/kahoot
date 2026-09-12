@@ -69,6 +69,6 @@ export interface SessionReport {
   pin: string;
   startedAt: string;
   endedAt: string | null;
-  quiz: { title: string };
+  quizTitle: string;
   participants: SessionParticipantReport[];
 }

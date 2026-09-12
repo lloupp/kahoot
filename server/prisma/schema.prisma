@@ -53,8 +53,11 @@ model Choice {
 model GameSession {
   id           String              @id @default(uuid())
   pin          String
-  quizId       String
-  quiz         Quiz                @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  // Nullable + a denormalized title snapshot so a teacher's game history and
+  // per-question reports survive deleting the quiz they were played from.
+  quizId       String?
+  quiz         Quiz?               @relation(fields: [quizId], references: [id], onDelete: SetNull)
+  quizTitle    String
   hostId       String
   status       String              @default("finished")
   startedAt    DateTime            @default(now())

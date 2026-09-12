@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { Navigate, useParams } from "react-router-dom";
 import { getSocket, Ack } from "../api/socket";
 import {
-  AnswerAck,
+  AnswerReceipt,
   LeaderboardPayload,
   LobbyPayload,
+  PersonalResult,
   PodiumPayload,
   PublicQuestion,
   QuestionStartPayload,
   RevealPayload,
+  StudentSessionSnapshot,
 } from "../api/gameTypes";
 import { loadParticipant } from "../lib/participantStorage";
 import { Card } from "../components/Card";
@@ -38,8 +40,8 @@ export function StudentSession() {
   const [lobby, setLobby] = useState<LobbyPayload | null>(null);
   const [question, setQuestion] = useState<PublicQuestion | null>(null);
   const [questionMeta, setQuestionMeta] = useState<QuestionStartPayload | null>(null);
-  const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null);
-  const [myAnswer, setMyAnswer] = useState<AnswerAck | null>(null);
+  const [hasAnswered, setHasAnswered] = useState(false);
+  const [myResult, setMyResult] = useState<PersonalResult | null>(null);
   const [reveal, setReveal] = useState<RevealPayload | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
   const [podium, setPodium] = useState<PodiumPayload | null>(null);
@@ -62,6 +64,9 @@ export function StudentSession() {
         return;
       }
       setQuizTitle(res.data.quizTitle ?? "");
+      setLobby(res.data.lobby);
+      setHasAnswered(res.data.hasAnsweredCurrentQuestion);
+      setMyResult(res.data.myResult);
       if (res.data.podium) {
         setPodium(res.data.podium);
         setPhase("podium");
@@ -69,19 +74,17 @@ export function StudentSession() {
         setLeaderboard(res.data.leaderboard);
         setPhase("leaderboard");
       } else if (res.data.question) {
-        applyQuestionStart(res.data.question);
+        setQuestionMeta(res.data.question);
+        setQuestion(res.data.question.question);
+        setReveal(res.data.reveal);
+        submittingRef.current = res.data.hasAnsweredCurrentQuestion;
+        setPhase(res.data.reveal ? "reveal" : "question");
       } else {
         setPhase("lobby");
       }
     }
 
-    function emitRejoin(): Promise<Ack<{
-      phase: string;
-      quizTitle: string;
-      question: QuestionStartPayload | null;
-      leaderboard: LeaderboardPayload | null;
-      podium: PodiumPayload | null;
-    }>> {
+    function emitRejoin(): Promise<Ack<StudentSessionSnapshot>> {
       return new Promise((resolve) => {
         socket.emit(
           "student:rejoin",
@@ -94,9 +97,10 @@ export function StudentSession() {
     function applyQuestionStart(data: QuestionStartPayload) {
       setQuestionMeta(data);
       setQuestion(data.question);
-      setSelectedChoiceId(null);
-      setMyAnswer(null);
+      setHasAnswered(false);
+      setMyResult(null);
       setReveal(null);
+      setErrorMessage(null);
       submittingRef.current = false;
       setPhase("question");
     }
@@ -116,6 +120,10 @@ export function StudentSession() {
       setHostAway(false);
       setReveal(data);
       setPhase("reveal");
+    }
+
+    function onAnswerResult(data: PersonalResult) {
+      setMyResult(data);
     }
 
     function onLeaderboard(data: LeaderboardPayload) {
@@ -138,6 +146,7 @@ export function StudentSession() {
     socket.on("lobby:update", onLobbyUpdate);
     socket.on("question:start", onQuestionStart);
     socket.on("question:reveal", onReveal);
+    socket.on("answer:result", onAnswerResult);
     socket.on("leaderboard:update", onLeaderboard);
     socket.on("game:over", onGameOver);
     socket.on("host:disconnected", onHostDisconnected);
@@ -149,6 +158,7 @@ export function StudentSession() {
       socket.off("lobby:update", onLobbyUpdate);
       socket.off("question:start", onQuestionStart);
       socket.off("question:reveal", onReveal);
+      socket.off("answer:result", onAnswerResult);
       socket.off("leaderboard:update", onLeaderboard);
       socket.off("game:over", onGameOver);
       socket.off("host:disconnected", onHostDisconnected);
@@ -161,22 +171,23 @@ export function StudentSession() {
   }
 
   async function submitAnswer(choiceId: string) {
-    if (!question || submittingRef.current || remainingMs <= 0) return;
+    // Deliberately not gated on the countdown reaching 0: the server clock,
+    // not this device's, is the only timing authority (a fast-clocked
+    // device could otherwise lock a student out of answering in time).
+    if (!question || submittingRef.current || hasAnswered) return;
     submittingRef.current = true;
-    setSelectedChoiceId(choiceId);
+    setHasAnswered(true);
     const socket = getSocket();
-    const res = await new Promise<Ack<AnswerAck>>((resolve) => {
+    const res = await new Promise<Ack<AnswerReceipt>>((resolve) => {
       socket.emit(
         "student:answer",
         { pin, participantId: stored!.participantId, questionId: question.id, choiceId },
         resolve,
       );
     });
-    if (res.ok) {
-      setMyAnswer(res.data);
-    } else {
+    if (!res.ok) {
       setErrorMessage(res.error);
-      setSelectedChoiceId(null);
+      setHasAnswered(false);
       submittingRef.current = false;
     }
   }
@@ -220,27 +231,25 @@ export function StudentSession() {
             </span>
             <span
               className={`text-lg font-bold tabular-nums ${remainingMs < 5000 ? "text-red-600" : "text-brand-700"}`}
-              aria-live="polite"
+              aria-live="off"
             >
               {Math.ceil(remainingMs / 1000)}s
             </span>
           </div>
           <Card>
-            <h1 className="text-xl font-semibold text-slate-900">{question.text}</h1>
+            <h1 className="text-xl font-semibold text-slate-900" aria-live="polite">
+              {question.text}
+            </h1>
             {question.imageUrl && (
               <img src={question.imageUrl} alt="" className="mt-4 max-h-64 w-full rounded-lg object-contain" />
             )}
           </Card>
 
-          {myAnswer ? (
+          {hasAnswered ? (
             <Card className="text-center">
-              <p className={`text-lg font-bold ${myAnswer.isCorrect ? "text-emerald-600" : "text-red-600"}`}>
-                {myAnswer.isCorrect ? "Correct!" : "Not quite"}
-              </p>
-              <p className="text-slate-500">+{myAnswer.pointsAwarded} points · {myAnswer.totalScore} total</p>
+              <p className="text-lg font-semibold text-slate-700">Answer locked in!</p>
+              <p className="text-slate-500">Results appear once time is up for everyone.</p>
             </Card>
-          ) : remainingMs <= 0 ? (
-            <Card className="text-center text-slate-500">Time&apos;s up! Waiting for results...</Card>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
               {question.choices.map((choice, i) => (
@@ -248,7 +257,6 @@ export function StudentSession() {
                   key={choice.id}
                   type="button"
                   onClick={() => submitAnswer(choice.id)}
-                  disabled={submittingRef.current || Boolean(selectedChoiceId)}
                   className={`flex min-h-[4.5rem] items-center gap-3 rounded-xl px-4 py-4 text-left text-lg font-semibold text-white shadow transition disabled:opacity-60 ${CHOICE_STYLES[i % CHOICE_STYLES.length]}`}
                 >
                   <span aria-hidden="true" className="text-2xl">
@@ -264,15 +272,24 @@ export function StudentSession() {
 
       {phase === "reveal" && (
         <Card className="flex flex-col items-center gap-4 text-center">
-          {myAnswer ? (
+          {!hasAnswered ? (
+            <p className="text-2xl font-bold text-slate-600">Time was up before you answered</p>
+          ) : myResult?.answered ? (
             <>
-              <p className={`text-2xl font-bold ${myAnswer.isCorrect ? "text-emerald-600" : "text-red-600"}`}>
-                {myAnswer.isCorrect ? "Correct!" : "Incorrect"}
+              <p className={`text-2xl font-bold ${myResult.isCorrect ? "text-emerald-600" : "text-red-600"}`}>
+                {myResult.isCorrect ? "Correct!" : "Incorrect"}
               </p>
-              <p className="text-slate-500">You earned {myAnswer.pointsAwarded} points · {myAnswer.totalScore} total</p>
+              <p className="text-slate-500">
+                You earned {myResult.pointsAwarded} points · {myResult.totalScore} total
+              </p>
             </>
           ) : (
-            <p className="text-2xl font-bold text-slate-600">Time was up before you answered</p>
+            <Spinner label="Calculating your result..." />
+          )}
+          {reveal && question && (
+            <p className="text-sm text-slate-500">
+              Correct answer: <span className="font-semibold">{question.choices.find((c) => c.id === reveal.correctChoiceId)?.text}</span>
+            </p>
           )}
           {reveal && (
             <p className="text-sm text-slate-400">

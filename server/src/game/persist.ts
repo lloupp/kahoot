@@ -1,16 +1,17 @@
 import { prisma } from "../db";
 import { GameSessionState } from "./types";
 
-/** Persists a finished game's final results for history/reporting. */
-export async function persistFinishedSession(session: GameSessionState) {
+/** Persists a finished (or abandoned) game's final results for history/reporting. */
+export async function persistFinishedSession(session: GameSessionState, status: "finished" | "abandoned" = "finished") {
   await prisma.gameSession.create({
     data: {
       id: session.sessionId,
       pin: session.pin,
       quizId: session.quizId,
+      quizTitle: session.quizTitle,
       hostId: session.hostUserId,
-      status: "finished",
-      startedAt: new Date(session.createdAt),
+      status,
+      startedAt: new Date(session.firstQuestionAt ?? session.createdAt),
       endedAt: new Date(),
       participants: {
         create: [...session.participants.values()]

@@ -45,12 +45,13 @@ CREATE TABLE "Choice" (
 CREATE TABLE "GameSession" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "pin" TEXT NOT NULL,
-    "quizId" TEXT NOT NULL,
+    "quizId" TEXT,
+    "quizTitle" TEXT NOT NULL,
     "hostId" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'finished',
     "startedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "endedAt" DATETIME,
-    CONSTRAINT "GameSession_quizId_fkey" FOREIGN KEY ("quizId") REFERENCES "Quiz" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "GameSession_quizId_fkey" FOREIGN KEY ("quizId") REFERENCES "Quiz" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable

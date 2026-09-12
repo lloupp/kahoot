@@ -44,19 +44,21 @@ sessionsRouter.post("/", async (req: AuthedRequest, res, next) => {
   }
 });
 
-// Session history for the logged-in teacher, most recent first.
+// Session history for the logged-in teacher, most recent first. Keyed by
+// hostId (who actually ran the game) rather than current quiz ownership, so
+// history survives the source quiz being deleted or edited afterwards.
 sessionsRouter.get("/history", async (req: AuthedRequest, res, next) => {
   try {
     const sessions = await prisma.gameSession.findMany({
-      where: { quiz: { ownerId: req.userId } },
+      where: { hostId: req.userId },
       orderBy: { startedAt: "desc" },
-      include: { quiz: { select: { title: true } }, participants: true },
+      include: { participants: true },
     });
     res.json(
       sessions.map((s) => ({
         id: s.id,
         pin: s.pin,
-        quizTitle: s.quiz.title,
+        quizTitle: s.quizTitle,
         startedAt: s.startedAt,
         endedAt: s.endedAt,
         playerCount: s.participants.length,
@@ -74,12 +76,11 @@ sessionsRouter.get("/history/:id", async (req: AuthedRequest, res, next) => {
     const session = await prisma.gameSession.findUnique({
       where: { id: req.params.id },
       include: {
-        quiz: { select: { title: true, ownerId: true } },
         participants: { include: { answers: true }, orderBy: { totalScore: "desc" } },
       },
     });
     if (!session) throw new HttpError(404, "Session not found");
-    if (session.quiz.ownerId !== req.userId) throw new HttpError(403, "You do not have access to this session");
+    if (session.hostId !== req.userId) throw new HttpError(403, "You do not have access to this session");
     res.json(session);
   } catch (err) {
     next(err);

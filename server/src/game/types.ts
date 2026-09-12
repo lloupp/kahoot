@@ -48,6 +48,10 @@ export interface GameSessionState {
   questionTimer: NodeJS.Timeout | null;
   participants: Map<string, Participant>;
   createdAt: number;
+  lastActivityAt: number;
+  /** When the first question actually started (i.e. play began), as opposed
+   * to `createdAt` which is when the lobby was opened. Null until then. */
+  firstQuestionAt: number | null;
 }
 
 export const MIN_NAME_LENGTH = 1;

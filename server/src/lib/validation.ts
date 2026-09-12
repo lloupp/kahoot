@@ -16,9 +16,24 @@ export const choiceSchema = z.object({
   isCorrect: z.boolean(),
 });
 
+const httpUrl = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine(
+    (value) => {
+      try {
+        return ["http:", "https:"].includes(new URL(value).protocol);
+      } catch {
+        return false;
+      }
+    },
+    { message: "Image URL must be a valid http:// or https:// link" },
+  );
+
 export const questionSchema = z.object({
   text: z.string().trim().min(1, "Question text is required").max(500),
-  imageUrl: z.string().trim().url().max(2000).optional().or(z.literal("")).optional(),
+  imageUrl: httpUrl.optional().or(z.literal("")).optional(),
   timeLimitMs: z.number().int().min(2000).max(120000).default(20000),
   points: z.number().int().min(0).max(10000).default(1000),
   choices: z

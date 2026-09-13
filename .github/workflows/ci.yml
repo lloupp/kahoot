@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Generate Prisma client
         run: npm run prisma:generate --workspace server
 
@@ -43,3 +46,62 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Install Playwright test runner
+        run: npm install --no-save --package-lock=false @playwright/test@1.55.0
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare E2E database
+        env:
+          DATABASE_URL: file:./e2e.db
+        run: npx prisma migrate deploy --schema server/prisma/schema.prisma
+
+      - name: Start API and web app
+        env:
+          DATABASE_URL: file:./e2e.db
+          JWT_SECRET: e2e-ci-secret
+          CLIENT_ORIGIN: http://127.0.0.1:5173
+          VITE_API_URL: http://127.0.0.1:4000
+        run: |
+          npm run dev:server > /tmp/quizarena-server.log 2>&1 &
+          npm run dev --workspace client -- --host 127.0.0.1 > /tmp/quizarena-client.log 2>&1 &
+          for i in {1..30}; do
+            curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null && break
+            sleep 1
+          done
+          curl --fail http://127.0.0.1:4000/api/health
+          for i in {1..30}; do
+            curl --fail --silent http://127.0.0.1:5173 >/dev/null && break
+            sleep 1
+          done
+          curl --fail http://127.0.0.1:5173 >/dev/null
+
+      - name: Run browser E2E
+        run: npx playwright test --config=e2e/playwright.config.ts
+
+      - name: Print service logs on failure
+        if: failure()
+        run: |
+          echo '--- server ---'
+          cat /tmp/quizarena-server.log || true
+          echo '--- client ---'
+          cat /tmp/quizarena-client.log || true

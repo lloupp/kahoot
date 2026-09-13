@@ -83,7 +83,7 @@ jobs:
           VITE_API_URL: http://127.0.0.1:4000
         run: |
           npm run dev:server > /tmp/quizarena-server.log 2>&1 &
-          npm run dev:client -- --host 127.0.0.1 > /tmp/quizarena-client.log 2>&1 &
+          npm run dev --workspace client -- --host 127.0.0.1 > /tmp/quizarena-client.log 2>&1 &
           for i in {1..30}; do
             curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null && break
             sleep 1

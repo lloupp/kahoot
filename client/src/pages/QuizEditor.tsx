@@ -101,8 +101,10 @@ export function QuizEditor() {
     setQuestions((prev) =>
       prev.map((q, i) => {
         if (i !== qIndex || q.choices.length <= 2) return q;
-        const choices = q.choices.filter((_, j) => j !== cIndex);
-        if (!choices.some((c) => c.isCorrect)) choices[0].isCorrect = true;
+        let choices = q.choices.filter((_, j) => j !== cIndex).map((choice) => ({ ...choice }));
+        if (!choices.some((c) => c.isCorrect)) {
+          choices = choices.map((choice, index) => ({ ...choice, isCorrect: index === 0 }));
+        }
         return { ...q, choices };
       }),
     );
